@@ -141,11 +141,11 @@ textarea {
 
 .hero-photo {
   object-fit: cover;
-  filter: grayscale(1) contrast(1.1) brightness(0.55);
+  object-position: center;
 }
 
 .hero-overlay {
-  background: rgba(0, 0, 0, 0.28);
+  background: rgba(0, 0, 0, 0.12);
 }
 
 .hero-content {
