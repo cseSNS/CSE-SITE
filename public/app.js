@@ -64,6 +64,18 @@ function createElement(tag, className, text) {
   return element;
 }
 
+function isSafeContentUrl(value, allowedProtocols) {
+  const url = String(value || "").trim();
+  if (!url || url.startsWith("//")) return false;
+  if (url.startsWith("/") && !url.startsWith("//")) return true;
+  if (allowedProtocols.includes("data") && /^data:image\/(png|jpeg|webp);base64,[a-z0-9+/=]+$/i.test(url)) return true;
+  try {
+    return allowedProtocols.includes(new URL(url).protocol.replace(":", ""));
+  } catch {
+    return false;
+  }
+}
+
 function renderRichText(container, value) {
   const html = String(value || "");
   if (!/<[a-z][\s\S]*>/i.test(html)) {
@@ -86,8 +98,12 @@ function renderRichText(container, value) {
       if (!allowedAttrs.has(attribute.name)) node.removeAttribute(attribute.name);
     });
     if (node.tagName === "A") {
+      if (!isSafeContentUrl(node.getAttribute("href"), ["https", "mailto"])) node.removeAttribute("href");
       node.target = "_blank";
       node.rel = "noopener noreferrer";
+    }
+    if (node.tagName === "IMG" && !isSafeContentUrl(node.getAttribute("src"), ["https", "data"])) {
+      node.remove();
     }
   });
   container.append(template.content.cloneNode(true));

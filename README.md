@@ -35,7 +35,9 @@ ADMIN_PATH=/une-url-admin-privee
 ADMIN_BOOTSTRAP_EMAIL=cse-admin@entreprise.fr
 ADMIN_BOOTSTRAP_PASSWORD=un-mot-de-passe-admin-long
 ADMIN_BOOTSTRAP_NAME=Administrateur CSE
+ADMIN_SESSION_MAX_AGE_SECONDS=14400
 COOKIE_SECURE=true
+MAIL_SETTINGS_ENCRYPTION_KEY=64-caracteres-hexadecimaux-aleatoires
 POSTGRES_DB=cse
 POSTGRES_USER=cse
 POSTGRES_PASSWORD=un-mot-de-passe-postgres-long
@@ -76,6 +78,45 @@ L'admin permet de:
 
 Les sessions admin utilisent un cookie `HttpOnly`. Les mots de passe sont hashes en base avec `scrypt`.
 Garde `COOKIE_SECURE=true` en production derriere HTTPS.
+
+## Securite
+
+- Les comptes disposent d'un role: `owner` (comptes, SMTP et configuration) ou `editor` (contenu, documents, idees).
+- Les sessions sont stockees en base sous forme de hash, expirent par defaut apres 4 heures et utilisent en HTTPS un cookie `__Host-` avec `HttpOnly`, `Secure`, `SameSite=Strict` et `Priority=High`.
+- Les actions sensibles controlent l'origine de la requete, attendent du JSON et sont limitees en debit. La connexion est limitee a 5 essais par compte et par quart d'heure.
+- Les articles riches sont assainis avant stockage. Les liens et images ne peuvent utiliser que des URL `https`, des liens `mailto` ou des images `data` valides.
+- Les mots de passe SMTP sont chiffres avec AES-256-GCM dans PostgreSQL. Genere la cle sur le VPS, garde-la dans `.env` et ne la mets jamais dans Git:
+
+```bash
+openssl rand -hex 32
+```
+
+- Les actions d'administration sont journalisees dans la table PostgreSQL `admin_audit_log` (connexion, contenus, documents, moderation, comptes et SMTP).
+
+### Fail2ban sur le VPS
+
+L'application limite deja les essais. Pour bannir au niveau du VPS les adresses qui insistent, installe Fail2ban puis copie les fichiers fournis:
+
+```bash
+sudo apt update
+sudo apt install -y fail2ban
+sudo cp deploy/fail2ban/filter.d/cse-nginx-admin.conf /etc/fail2ban/filter.d/
+sudo cp deploy/fail2ban/jail.d/cse-nginx-admin.local /etc/fail2ban/jail.d/
+sudo fail2ban-regex /var/log/nginx/access.log /etc/fail2ban/filter.d/cse-nginx-admin.conf
+sudo systemctl restart fail2ban
+sudo fail2ban-client status cse-nginx-admin
+```
+
+Le jail surveille les echecs de connexion (`401`, `403` ou `429`) dans les logs Nginx et bannit une adresse apres 5 essais pendant 15 minutes, pour 12 heures.
+
+Le virtual host Nginx doit conserver les informations d'origine suivantes vers le conteneur, sans quoi le controle anti-CSRF bloquera les ecritures admin:
+
+```nginx
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-Host $host;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
 
 ## Pages publiques
 

@@ -1,0 +1,8 @@
+[cse-nginx-admin]
+enabled = true
+filter = cse-nginx-admin
+logpath = /var/log/nginx/access.log
+maxretry = 5
+findtime = 15m
+bantime = 12h
+backend = auto

@@ -34,11 +34,20 @@ const logoutButton = document.querySelector("[data-logout]");
 let content = { news: [], posts: [], meetings: [], documents: [], members: [] };
 let ideas = [];
 let adminAccounts = [];
+let currentAdmin = null;
 
 function setMessage(element, message, state = "") {
   if (!element) return;
   element.textContent = message;
   element.dataset.state = state;
+}
+
+function applyPermissions(admin) {
+  currentAdmin = admin;
+  const isOwner = admin?.role === "owner";
+  document.querySelectorAll("[data-owner-only]").forEach((element) => {
+    element.hidden = !isOwner;
+  });
 }
 
 function uid(prefix) {
@@ -609,7 +618,8 @@ function renderAdminAccounts() {
     const header = createElement("div", "admin-item-header");
     const copy = createElement("div");
     copy.append(createElement("h3", "", admin.displayName || admin.email));
-    copy.append(createElement("p", "admin-item-meta", `${admin.email} - ${admin.active ? "Actif" : "Desactive"} - ${admin.lastLoginAt ? new Date(admin.lastLoginAt).toLocaleString("fr-FR") : "Jamais connecte"}`));
+    const role = admin.role === "owner" ? "Proprietaire" : "Editeur";
+    copy.append(createElement("p", "admin-item-meta", `${admin.email} - ${role} - ${admin.active ? "Actif" : "Desactive"} - ${admin.lastLoginAt ? new Date(admin.lastLoginAt).toLocaleString("fr-FR") : "Jamais connecte"}`));
     header.append(copy);
     const actions = createElement("div", "admin-actions");
     const toggle = createElement("button", admin.active ? "button button-danger" : "button button-success", admin.active ? "Desactiver" : "Reactiver");
@@ -644,7 +654,8 @@ async function createAdminAccount(event) {
     body: JSON.stringify({
       displayName: formData.get("displayName"),
       email: formData.get("email"),
-      password: formData.get("password")
+      password: formData.get("password"),
+      role: formData.get("role")
     })
   });
   if (!response.ok) {
@@ -675,9 +686,13 @@ async function bootAdmin() {
     showLogin();
     return;
   }
+  const payload = await response.json();
+  applyPermissions(payload.admin);
   showAdmin();
   activateTab("dashboard");
-  await Promise.all([loadContent(), loadIdeas(), loadStats(), loadMailSettings(), loadAdminAccounts()]);
+  const loaders = [loadContent(), loadIdeas(), loadStats()];
+  if (payload.admin.role === "owner") loaders.push(loadMailSettings(), loadAdminAccounts());
+  await Promise.all(loaders);
 }
 
 async function loginAdmin(email, password) {

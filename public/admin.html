@@ -22,7 +22,7 @@
         <button type="button" data-tab-button="posts">Articles</button>
         <button type="button" data-tab-button="documents">PV</button>
         <button type="button" data-tab-button="members">Membres</button>
-        <button type="button" data-tab-button="settings">Param&egrave;tres</button>
+        <button type="button" data-tab-button="settings" data-owner-only>Param&egrave;tres</button>
       </nav>
       <div class="admin-header-actions">
         <a class="button button-secondary" href="/">Site public</a>
@@ -83,7 +83,7 @@
             </div>
           </div>
           <div class="dashboard-grid">
-            <article class="admin-item">
+            <article class="admin-item" data-owner-only>
               <h3>A traiter en priorit&eacute;</h3>
               <p class="admin-item-meta">Les id&eacute;es en attente doivent &ecirc;tre relues avant publication et vote collaborateurs.</p>
               <button class="button button-primary" type="button" data-shortcut-tab="ideas">Ouvrir les id&eacute;es</button>
@@ -212,7 +212,7 @@
           <p class="form-status" data-member-status role="status"></p>
         </section>
 
-        <section class="admin-panel" data-tab="settings">
+        <section class="admin-panel" data-tab="settings" data-owner-only>
           <div class="admin-panel-heading">
             <div>
               <p class="eyebrow">Configuration</p>
@@ -281,6 +281,13 @@
               <label>
                 Mot de passe temporaire
                 <input name="password" type="password" minlength="12" placeholder="12 caract&egrave;res minimum" required>
+              </label>
+              <label>
+                R&ocirc;le
+                <select name="role">
+                  <option value="editor">Editeur du portail</option>
+                  <option value="owner">Propri&eacute;taire</option>
+                </select>
               </label>
               <div class="settings-actions">
                 <button class="button button-primary" type="submit">Cr&eacute;er le compte</button>

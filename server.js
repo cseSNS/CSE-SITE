@@ -1,11 +1,12 @@
 import http from "node:http";
-import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
+import sanitizeHtml from "sanitize-html";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadLocalEnv(path.join(__dirname, ".env"));
@@ -20,7 +21,11 @@ const databaseUrl = process.env.DATABASE_URL || "";
 const bootstrapAdminEmail = process.env.ADMIN_BOOTSTRAP_EMAIL || "";
 const bootstrapAdminPassword = process.env.ADMIN_BOOTSTRAP_PASSWORD || "";
 const bootstrapAdminName = process.env.ADMIN_BOOTSTRAP_NAME || "Administrateur CSE";
-const sessionMaxAgeSeconds = 8 * 60 * 60;
+const sessionMaxAgeSeconds = Math.min(Math.max(Number(process.env.ADMIN_SESSION_MAX_AGE_SECONDS || 14_400), 900), 43_200);
+const mailSettingsEncryptionKey = parseEncryptionKey(process.env.MAIL_SETTINGS_ENCRYPTION_KEY || "");
+if (process.env.NODE_ENV === "production" && !mailSettingsEncryptionKey) {
+  throw new Error("MAIL_SETTINGS_ENCRYPTION_KEY is required in production.");
+}
 if (!databaseUrl) {
   throw new Error("DATABASE_URL is required. Configure PostgreSQL before starting cse-site.");
 }
@@ -32,6 +37,9 @@ const publicIdeaStatuses = new Set(["approved", "in_progress"]);
 
 const rateLimitWindowMs = 10 * 60 * 1000;
 const rateLimitMax = 5;
+const loginRateLimitWindowMs = 15 * 60 * 1000;
+const loginRateLimitMax = 5;
+const maxRateLimitBuckets = 10_000;
 const rateBuckets = new Map();
 
 function loadLocalEnv(filePath) {
@@ -45,6 +53,15 @@ function loadLocalEnv(filePath) {
       process.env[key] = rest.join("=").replace(/^["']|["']$/g, "");
     }
   }
+}
+
+function parseEncryptionKey(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (!/^[a-f0-9]{64}$/i.test(raw)) {
+    throw new Error("MAIL_SETTINGS_ENCRYPTION_KEY must contain exactly 64 hexadecimal characters.");
+  }
+  return Buffer.from(raw, "hex");
 }
 
 const defaultContent = {
@@ -207,6 +224,10 @@ function setSecurityHeaders(res) {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.setHeader("Origin-Agent-Cluster", "?1");
+  res.setHeader("X-Permitted-Cross-Domain-Policies", "none");
   res.setHeader(
     "Content-Security-Policy",
     [
@@ -218,6 +239,8 @@ function setSecurityHeaders(res) {
       "font-src 'self' https://fonts.gstatic.com",
       "base-uri 'self'",
       "form-action 'self'",
+      "object-src 'none'",
+      "media-src 'self'",
       "frame-ancestors 'none'"
     ].join("; ")
   );
@@ -255,7 +278,9 @@ function notify(title, message) {
 }
 
 function csvCell(value) {
-  return `"${String(value ?? "").replace(/"/g, '""').replace(/\r?\n/g, " ")}"`;
+  const raw = String(value ?? "").replace(/\r?\n/g, " ");
+  const safe = /^[=+\-@]/.test(raw.trimStart()) ? `'${raw}` : raw;
+  return `"${safe.replace(/"/g, '""')}"`;
 }
 
 function ideasToCsv(ideas) {
@@ -281,13 +306,17 @@ function normalizeAdminPath(value) {
 function parseCookies(req) {
   const header = req.headers.cookie || "";
   return Object.fromEntries(header.split(";").map((part) => {
-    const [name, ...value] = part.trim().split("=");
-    return [decodeURIComponent(name || ""), decodeURIComponent(value.join("=") || "")];
-  }).filter(([name]) => name));
+    try {
+      const [name, ...value] = part.trim().split("=");
+      return [decodeURIComponent(name || ""), decodeURIComponent(value.join("=") || "")];
+    } catch {
+      return null;
+    }
+  }).filter((entry) => entry?.[0]));
 }
 
 function cookieHeader(name, value, options = {}) {
-  const parts = [`${encodeURIComponent(name)}=${encodeURIComponent(value)}`, "HttpOnly", "SameSite=Lax", "Path=/"];
+  const parts = [`${encodeURIComponent(name)}=${encodeURIComponent(value)}`, "HttpOnly", "SameSite=Strict", "Path=/", "Priority=High"];
   if (options.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`);
   if (options.secure) parts.push("Secure");
   return parts.join("; ");
@@ -295,6 +324,16 @@ function cookieHeader(name, value, options = {}) {
 
 function isSecureRequest(req) {
   return process.env.COOKIE_SECURE === "true" || req.headers["x-forwarded-proto"] === "https";
+}
+
+function sessionCookieName(req) {
+  return isSecureRequest(req) ? "__Host-cse_admin_session" : "cse_admin_session";
+}
+
+function setTransportSecurityHeader(req, res) {
+  if (isSecureRequest(req)) {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
 }
 
 function hashSessionToken(token) {
@@ -314,6 +353,8 @@ async function verifyPassword(password, storedHash) {
   return safeEqual(Buffer.from(derived).toString("hex"), expected);
 }
 
+const fallbackPasswordHash = await hashPassword("invalid-admin-login-password");
+
 function publicAdminAccount(row) {
   return {
     id: row.id,
@@ -324,8 +365,19 @@ function publicAdminAccount(row) {
   };
 }
 
+async function auditAdminAction(session, action, metadata = {}) {
+  try {
+    await dbPool.query(
+      "INSERT INTO admin_audit_log (id, admin_id, action, metadata) VALUES ($1, $2, $3, $4::jsonb)",
+      [randomUUID(), session?.admin?.id || null, cleanText(action, 100), JSON.stringify(metadata)]
+    );
+  } catch (error) {
+    console.error("Could not write admin audit log", error.message);
+  }
+}
+
 async function getAdminSession(req) {
-  const token = parseCookies(req).cse_admin_session;
+  const token = parseCookies(req)[sessionCookieName(req)];
   if (!token) return null;
   const tokenHash = hashSessionToken(token);
   const result = await dbPool.query(
@@ -334,7 +386,8 @@ async function getAdminSession(req) {
      JOIN admin_accounts a ON a.id = s.admin_id
      WHERE s.session_token_hash = $1
        AND s.expires_at > now()
-       AND a.active = true`,
+       AND a.active = true
+       AND a.role IN ('owner', 'editor')`,
     [tokenHash]
   );
   if (!result.rows.length) return null;
@@ -350,24 +403,71 @@ async function requireAdmin(req, res) {
   return session;
 }
 
+function requireOwner(res, session) {
+  if (session?.admin?.role === "owner") return true;
+  sendJson(res, 403, { ok: false, error: "forbidden" });
+  return false;
+}
+
 function getClientKey(req) {
   const forwarded = req.headers["x-forwarded-for"];
   const rawIp = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(",")[0] || req.socket.remoteAddress || "local";
   return createHash("sha256").update(rawIp).digest("hex");
 }
 
-function isRateLimited(req) {
+function isRateLimited(req, scope = "public", max = rateLimitMax, windowMs = rateLimitWindowMs, identity = "") {
   const now = Date.now();
-  const key = getClientKey(req);
+  const key = `${scope}:${getClientKey(req)}:${identity}`;
   const bucket = rateBuckets.get(key) || [];
-  const recent = bucket.filter((timestamp) => now - timestamp < rateLimitWindowMs);
-  if (recent.length >= rateLimitMax) {
+  const recent = bucket.filter((timestamp) => now - timestamp < windowMs);
+  if (recent.length >= max) {
     rateBuckets.set(key, recent);
     return true;
   }
   recent.push(now);
   rateBuckets.set(key, recent);
+  if (rateBuckets.size > maxRateLimitBuckets) {
+    for (const [bucketKey, timestamps] of rateBuckets) {
+      if (!timestamps.some((timestamp) => now - timestamp < windowMs)) rateBuckets.delete(bucketKey);
+      if (rateBuckets.size <= maxRateLimitBuckets) break;
+    }
+    if (rateBuckets.size > maxRateLimitBuckets) {
+      rateBuckets.delete(rateBuckets.keys().next().value);
+    }
+  }
   return false;
+}
+
+function rejectRateLimit(res, retryAfterSeconds) {
+  res.setHeader("Retry-After", String(retryAfterSeconds));
+  sendJson(res, 429, { ok: false, error: "rate_limited" });
+}
+
+function isTrustedMutation(req) {
+  const origin = String(req.headers.origin || "");
+  if (!origin) return true;
+  try {
+    const requestHost = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+    return new URL(origin).host === requestHost;
+  } catch {
+    return false;
+  }
+}
+
+function isJsonRequest(req) {
+  return String(req.headers["content-type"] || "").toLowerCase().startsWith("application/json");
+}
+
+function requireTrustedMutation(req, res, { json = false } = {}) {
+  if (!isTrustedMutation(req)) {
+    sendJson(res, 403, { ok: false, error: "invalid_origin" });
+    return false;
+  }
+  if (json && !isJsonRequest(req)) {
+    sendJson(res, 415, { ok: false, error: "unsupported_media_type" });
+    return false;
+  }
+  return true;
 }
 
 async function readBody(req, maxBytes = 8192) {
@@ -400,6 +500,38 @@ function cleanLongText(value, maxLength) {
     .slice(0, maxLength);
 }
 
+function sanitizeRichText(value, maxLength) {
+  const source = String(value || "").slice(0, maxLength * 4);
+  return sanitizeHtml(source, {
+    allowedTags: ["p", "br", "strong", "b", "em", "i", "u", "a", "ul", "ol", "li", "h2", "h3", "blockquote", "img"],
+    allowedAttributes: {
+      a: ["href", "target", "rel"],
+      img: ["src", "alt"]
+    },
+    allowedSchemes: ["https", "mailto"],
+    allowedSchemesByTag: { img: ["https", "data"] },
+    allowProtocolRelative: false,
+    transformTags: {
+      a: (tagName, attributes) => ({
+        tagName,
+        attribs: { href: attributes.href || "", target: "_blank", rel: "noopener noreferrer" }
+      })
+    }
+  }).trim().slice(0, maxLength);
+}
+
+function sanitizePhotoSource(value) {
+  const source = cleanText(value, 1_000_000);
+  if (/^https:\/\/[^\s]+$/i.test(source)) return source;
+  if (/^data:image\/(png|jpeg|webp);base64,[a-z0-9+/=]+$/i.test(source) && source.length <= 1_000_000) return source;
+  return "";
+}
+
+function isValidEmail(value) {
+  const email = cleanText(value, 180);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
 function cleanDate(value) {
   const cleaned = cleanText(value, 20);
   return /^\d{4}-\d{2}-\d{2}$/.test(cleaned) ? cleaned : "";
@@ -421,7 +553,7 @@ function normalizeContent(rawContent) {
       category: cleanText(item.category, 60) || "Info CSE",
       title: cleanText(item.title, 160),
       excerpt: cleanLongText(item.excerpt, 360),
-      body: cleanLongText(item.body, 5000),
+      body: sanitizeRichText(item.body, 5000),
       date: cleanDate(item.date),
       status: ["draft", "published"].includes(item.status) ? item.status : "published",
       featured: Boolean(item.featured)
@@ -450,8 +582,8 @@ function normalizeContent(rawContent) {
       service: cleanText(item.service, 100),
       site: cleanText(item.site, 100),
       role: ["Titulaire", "Suppleant"].includes(item.role) ? item.role : "Titulaire",
-      photo: cleanText(item.photo, 1_000_000),
-      email: cleanText(item.email, 120)
+      photo: sanitizePhotoSource(item.photo),
+      email: isValidEmail(item.email) ? cleanText(item.email, 120) : ""
     })).filter((item) => item.firstName || item.lastName) : []
   };
 }
@@ -531,6 +663,16 @@ async function initializeDatabase() {
 
     CREATE INDEX IF NOT EXISTS admin_sessions_expires_at_idx ON admin_sessions (expires_at);
 
+    CREATE TABLE IF NOT EXISTS admin_audit_log (
+      id text PRIMARY KEY,
+      admin_id text REFERENCES admin_accounts(id) ON DELETE SET NULL,
+      action text NOT NULL,
+      metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS admin_audit_log_created_at_idx ON admin_audit_log (created_at DESC);
+
     CREATE TABLE IF NOT EXISTS email_outbox (
       id text PRIMARY KEY,
       type text NOT NULL,
@@ -554,6 +696,7 @@ async function initializeDatabase() {
       updated_at timestamptz NOT NULL DEFAULT now()
     );
   `);
+  await dbPool.query("UPDATE admin_accounts SET role = 'owner' WHERE role = 'admin'");
   await seedBootstrapAdmin();
 }
 
@@ -572,7 +715,7 @@ async function seedBootstrapAdmin() {
   }
   await dbPool.query(
     `INSERT INTO admin_accounts (id, email, password_hash, display_name, role, provider)
-     VALUES ($1, $2, $3, $4, 'admin', 'local')`,
+     VALUES ($1, $2, $3, $4, 'owner', 'local')`,
     [randomUUID(), cleanText(bootstrapAdminEmail.toLowerCase(), 180), await hashPassword(bootstrapAdminPassword), cleanText(bootstrapAdminName, 120)]
   );
 }
@@ -690,8 +833,9 @@ function publicIdea(idea) {
 }
 
 async function handleIdeaSubmission(req, res) {
+  if (!requireTrustedMutation(req, res, { json: true })) return;
   if (isRateLimited(req)) {
-    sendJson(res, 429, { ok: false, error: "rate_limited" });
+    rejectRateLimit(res, Math.ceil(rateLimitWindowMs / 1000));
     return;
   }
 
@@ -748,8 +892,9 @@ async function getStats() {
 }
 
 async function handleIdeaVote(req, res, ideaId) {
+  if (!requireTrustedMutation(req, res)) return;
   if (isRateLimited(req)) {
-    sendJson(res, 429, { ok: false, error: "rate_limited" });
+    rejectRateLimit(res, Math.ceil(rateLimitWindowMs / 1000));
     return;
   }
 
@@ -766,6 +911,11 @@ async function handleIdeaVote(req, res, ideaId) {
 }
 
 async function handleAdminLogin(req, res) {
+  if (!requireTrustedMutation(req, res, { json: true })) return;
+  if (isRateLimited(req, "login-ip", 20, loginRateLimitWindowMs)) {
+    rejectRateLimit(res, Math.ceil(loginRateLimitWindowMs / 1000));
+    return;
+  }
   let body;
   try {
     body = JSON.parse(await readBody(req, 8_000));
@@ -776,6 +926,11 @@ async function handleAdminLogin(req, res) {
 
   const email = cleanText(body.email, 180).toLowerCase();
   const password = String(body.password || "");
+  const emailKey = createHash("sha256").update(email).digest("hex");
+  if (isRateLimited(req, "login-account", loginRateLimitMax, loginRateLimitWindowMs, emailKey)) {
+    rejectRateLimit(res, Math.ceil(loginRateLimitWindowMs / 1000));
+    return;
+  }
   const adminCount = Number((await dbPool.query("SELECT count(*)::int AS count FROM admin_accounts")).rows[0].count);
   if (adminCount === 0) {
     sendJson(res, 503, { ok: false, error: "admin_not_configured" });
@@ -784,7 +939,8 @@ async function handleAdminLogin(req, res) {
 
   const result = await dbPool.query("SELECT * FROM admin_accounts WHERE email = $1 AND active = true", [email]);
   const row = result.rows[0];
-  if (!row || !(await verifyPassword(password, row.password_hash))) {
+  const passwordValid = await verifyPassword(password, row?.password_hash || fallbackPasswordHash);
+  if (!row || !passwordValid) {
     sendJson(res, 401, { ok: false, error: "invalid_credentials" });
     return;
   }
@@ -797,7 +953,8 @@ async function handleAdminLogin(req, res) {
     [randomUUID(), row.id, hashSessionToken(sessionToken), sessionMaxAgeSeconds]
   );
   await dbPool.query("UPDATE admin_accounts SET last_login_at = now(), updated_at = now() WHERE id = $1", [row.id]);
-  res.setHeader("Set-Cookie", cookieHeader("cse_admin_session", sessionToken, { maxAge: sessionMaxAgeSeconds, secure: isSecureRequest(req) }));
+  res.setHeader("Set-Cookie", cookieHeader(sessionCookieName(req), sessionToken, { maxAge: sessionMaxAgeSeconds, secure: isSecureRequest(req) }));
+  await auditAdminAction({ admin: publicAdminAccount(row) }, "admin.login");
   sendJson(res, 200, { ok: true, admin: publicAdminAccount({ ...row, last_login_at: new Date() }) });
 }
 
@@ -805,8 +962,31 @@ async function handleAdminLogout(req, res, session) {
   if (session?.tokenHash) {
     await dbPool.query("DELETE FROM admin_sessions WHERE session_token_hash = $1", [session.tokenHash]);
   }
-  res.setHeader("Set-Cookie", cookieHeader("cse_admin_session", "", { maxAge: 0, secure: isSecureRequest(req) }));
+  await auditAdminAction(session, "admin.logout");
+  res.setHeader("Set-Cookie", cookieHeader(sessionCookieName(req), "", { maxAge: 0, secure: isSecureRequest(req) }));
   sendJson(res, 200, { ok: true });
+}
+
+function encryptMailSecret(value) {
+  const secret = String(value || "");
+  if (!secret) return "";
+  if (!mailSettingsEncryptionKey) throw new Error("mail_encryption_not_configured");
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", mailSettingsEncryptionKey, iv);
+  const encrypted = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `enc:v1:${iv.toString("base64url")}:${tag.toString("base64url")}:${encrypted.toString("base64url")}`;
+}
+
+function decryptMailSecret(value) {
+  const stored = String(value || "");
+  if (!stored || !stored.startsWith("enc:v1:")) return stored;
+  if (!mailSettingsEncryptionKey) throw new Error("mail_encryption_not_configured");
+  const [, , ivValue, tagValue, encryptedValue] = stored.split(":");
+  if (!ivValue || !tagValue || !encryptedValue) throw new Error("invalid_encrypted_mail_secret");
+  const decipher = createDecipheriv("aes-256-gcm", mailSettingsEncryptionKey, Buffer.from(ivValue, "base64url"));
+  decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
+  return Buffer.concat([decipher.update(Buffer.from(encryptedValue, "base64url")), decipher.final()]).toString("utf8");
 }
 
 function normalizeMailSettings(row) {
@@ -815,7 +995,7 @@ function normalizeMailSettings(row) {
     port: Number(row?.port || 587),
     secure: Boolean(row?.secure),
     username: cleanText(row?.username, 200),
-    password: String(row?.password || ""),
+    password: decryptMailSecret(row?.password),
     fromEmail: cleanText(row?.from_email, 200),
     fromName: cleanText(row?.from_name, 120) || "CSE"
   };
@@ -838,7 +1018,7 @@ function publicMailSettings(settings) {
   };
 }
 
-async function handleMailSettingsUpdate(req, res) {
+async function handleMailSettingsUpdate(req, res, session) {
   let body;
   try {
     body = JSON.parse(await readBody(req, 20_000));
@@ -858,6 +1038,11 @@ async function handleMailSettingsUpdate(req, res) {
     fromName: cleanText(body.fromName, 120) || "CSE"
   };
 
+  if (!settings.host || !isValidEmail(settings.fromEmail)) {
+    sendJson(res, 422, { ok: false, error: "invalid_mail_settings" });
+    return;
+  }
+
   await dbPool.query(
     `INSERT INTO mail_settings (id, host, port, secure, username, password, from_email, from_name, updated_at)
      VALUES (1, $1, $2, $3, $4, $5, $6, $7, now())
@@ -870,9 +1055,10 @@ async function handleMailSettingsUpdate(req, res) {
        from_email = EXCLUDED.from_email,
        from_name = EXCLUDED.from_name,
        updated_at = now()`,
-    [settings.host, settings.port, settings.secure, settings.username, settings.password, settings.fromEmail, settings.fromName]
+    [settings.host, settings.port, settings.secure, settings.username, encryptMailSecret(settings.password), settings.fromEmail, settings.fromName]
   );
 
+  await auditAdminAction(session, "mail.settings_updated", { host: settings.host, fromEmail: settings.fromEmail });
   sendJson(res, 200, { ok: true, settings: publicMailSettings(settings) });
 }
 
@@ -886,13 +1072,15 @@ async function sendConfiguredMail({ to, subject, text, html }) {
     host: settings.host,
     port: settings.port,
     secure: settings.secure,
+    requireTLS: !settings.secure,
+    tls: { minVersion: "TLSv1.2" },
     auth: settings.username ? { user: settings.username, pass: settings.password } : undefined
   });
   const from = settings.fromName ? `"${settings.fromName.replace(/"/g, "'")}" <${settings.fromEmail}>` : settings.fromEmail;
   await transporter.sendMail({ from, to, subject, text, html });
 }
 
-async function handleMailTest(req, res) {
+async function handleMailTest(req, res, session) {
   let body;
   try {
     body = JSON.parse(await readBody(req, 4_000));
@@ -902,6 +1090,10 @@ async function handleMailTest(req, res) {
   }
 
   const recipient = cleanText(body.recipient, 200);
+  if (!isValidEmail(recipient)) {
+    sendJson(res, 422, { ok: false, error: "invalid_recipient" });
+    return;
+  }
   try {
     await sendConfiguredMail({
       to: recipient,
@@ -913,6 +1105,7 @@ async function handleMailTest(req, res) {
       "INSERT INTO email_outbox (id, type, recipient, subject, status, sent_at) VALUES ($1, 'test', $2, $3, 'sent', now())",
       [randomUUID(), recipient, "Test email portail CSE"]
     );
+    await auditAdminAction(session, "mail.test_sent", { recipient });
     sendJson(res, 200, { ok: true });
   } catch (error) {
     await dbPool.query(
@@ -928,7 +1121,7 @@ async function handleAdminAccountsList(req, res) {
   sendJson(res, 200, { ok: true, admins: result.rows.map((row) => ({ ...publicAdminAccount(row), active: row.active })) });
 }
 
-async function handleAdminAccountCreate(req, res) {
+async function handleAdminAccountCreate(req, res, session) {
   let body;
   try {
     body = JSON.parse(await readBody(req, 12_000));
@@ -939,17 +1132,19 @@ async function handleAdminAccountCreate(req, res) {
   const email = cleanText(body.email, 180).toLowerCase();
   const displayName = cleanText(body.displayName, 120);
   const password = String(body.password || "");
-  if (!email || !email.includes("@") || password.length < 12) {
+  const role = body.role === "owner" ? "owner" : "editor";
+  if (!isValidEmail(email) || password.length < 12) {
     sendJson(res, 422, { ok: false, error: "invalid_admin_account" });
     return;
   }
   try {
     const result = await dbPool.query(
       `INSERT INTO admin_accounts (id, email, password_hash, display_name, role, provider)
-       VALUES ($1, $2, $3, $4, 'admin', 'local')
+       VALUES ($1, $2, $3, $4, $5, 'local')
        RETURNING *`,
-      [randomUUID(), email, await hashPassword(password), displayName || email]
+      [randomUUID(), email, await hashPassword(password), displayName || email, role]
     );
+    await auditAdminAction(session, "admin.account_created", { accountId: result.rows[0].id, role });
     sendJson(res, 201, { ok: true, admin: { ...publicAdminAccount(result.rows[0]), active: result.rows[0].active } });
   } catch (error) {
     sendJson(res, 409, { ok: false, error: "admin_account_exists", message: error.message });
@@ -964,11 +1159,18 @@ async function handleAdminAccountUpdate(req, res, accountId, session) {
     sendJson(res, 400, { ok: false, error: "invalid_payload" });
     return;
   }
+  const existing = await dbPool.query("SELECT id, role, active FROM admin_accounts WHERE id = $1", [accountId]);
+  if (!existing.rows.length) {
+    sendJson(res, 404, { ok: false, error: "not_found" });
+    return;
+  }
+  const current = existing.rows[0];
   const displayName = cleanText(body.displayName, 120);
   const active = body.active !== false;
+  const role = ["owner", "editor"].includes(body.role) ? body.role : current.role;
   const password = String(body.password || "");
-  if (accountId === session.admin.id && !active) {
-    sendJson(res, 422, { ok: false, error: "cannot_disable_self" });
+  if (accountId === session.admin.id && (!active || role !== "owner")) {
+    sendJson(res, 422, { ok: false, error: "cannot_reduce_own_access" });
     return;
   }
   if (password && password.length < 12) {
@@ -976,32 +1178,37 @@ async function handleAdminAccountUpdate(req, res, accountId, session) {
     return;
   }
 
+  if (current.role === "owner" && (!active || role !== "owner")) {
+    const ownerCount = Number((await dbPool.query("SELECT count(*)::int AS count FROM admin_accounts WHERE role = 'owner' AND active = true")).rows[0].count);
+    if (ownerCount <= 1) {
+      sendJson(res, 422, { ok: false, error: "cannot_remove_last_owner" });
+      return;
+    }
+  }
+
   const result = password
     ? await dbPool.query(
       `UPDATE admin_accounts
-       SET display_name = $2, active = $3, password_hash = $4, updated_at = now()
+       SET display_name = $2, active = $3, role = $4, password_hash = $5, updated_at = now()
        WHERE id = $1
        RETURNING *`,
-      [accountId, displayName, active, await hashPassword(password)]
+      [accountId, displayName, active, role, await hashPassword(password)]
     )
     : await dbPool.query(
       `UPDATE admin_accounts
-       SET display_name = $2, active = $3, updated_at = now()
+       SET display_name = $2, active = $3, role = $4, updated_at = now()
        WHERE id = $1
        RETURNING *`,
-      [accountId, displayName, active]
+      [accountId, displayName, active, role]
     );
-  if (!result.rows.length) {
-    sendJson(res, 404, { ok: false, error: "not_found" });
-    return;
-  }
-  if (!active) {
+  if (!active || role !== current.role || password) {
     await dbPool.query("DELETE FROM admin_sessions WHERE admin_id = $1", [accountId]);
   }
+  await auditAdminAction(session, "admin.account_updated", { accountId, active, role, passwordChanged: Boolean(password) });
   sendJson(res, 200, { ok: true, admin: { ...publicAdminAccount(result.rows[0]), active: result.rows[0].active } });
 }
 
-async function handleAdminIdeaUpdate(req, res, ideaId) {
+async function handleAdminIdeaUpdate(req, res, ideaId, session) {
   let body;
   try {
     body = JSON.parse(await readBody(req, 4_000));
@@ -1029,10 +1236,11 @@ async function handleAdminIdeaUpdate(req, res, ideaId) {
   idea.targetMeetingId = cleanText(body.targetMeetingId, 80);
   idea.updatedAt = new Date().toISOString();
   await saveIdeasDb(db);
+  await auditAdminAction(session, "idea.updated", { ideaId, status: idea.status });
   sendJson(res, 200, { ok: true, idea });
 }
 
-async function handleAdminContentUpdate(req, res) {
+async function handleAdminContentUpdate(req, res, session) {
   let body;
   try {
     body = JSON.parse(await readBody(req, 2_000_000));
@@ -1042,7 +1250,14 @@ async function handleAdminContentUpdate(req, res) {
   }
 
   const content = normalizeContent(body.content || body);
-  sendJson(res, 200, { ok: true, content: await saveContent(content) });
+  const savedContent = await saveContent(content);
+  await auditAdminAction(session, "content.updated", {
+    news: savedContent.news.length,
+    posts: savedContent.posts.length,
+    meetings: savedContent.meetings.length,
+    members: savedContent.members.length
+  });
+  sendJson(res, 200, { ok: true, content: savedContent });
 }
 
 function safeUploadName(fileName) {
@@ -1056,7 +1271,7 @@ function safeUploadName(fileName) {
   return `${base}-${Date.now()}${ext}`;
 }
 
-async function handleAdminDocumentUpload(req, res) {
+async function handleAdminDocumentUpload(req, res, session) {
   let body;
   try {
     body = JSON.parse(await readBody(req, 11_000_000));
@@ -1099,6 +1314,7 @@ async function handleAdminDocumentUpload(req, res) {
   content.documents.unshift(document);
   const savedContent = await saveContent(content);
   notify("Nouveau document CSE", `${document.title} (${document.visibility})`);
+  await auditAdminAction(session, "document.uploaded", { documentId: document.id, visibility: document.visibility });
   sendJson(res, 201, { ok: true, document, content: savedContent });
 }
 
@@ -1169,6 +1385,7 @@ async function serveStatic(req, res) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  setTransportSecurityHeader(req, res);
 
   try {
     if (req.method === "GET" && url.pathname === "/healthz") {
@@ -1216,6 +1433,9 @@ const server = http.createServer(async (req, res) => {
       const session = await requireAdmin(req, res);
       if (!session) return;
 
+      const isMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(req.method || "");
+      if (isMutation && !requireTrustedMutation(req, res, { json: url.pathname !== "/api/admin/logout" })) return;
+
       if (req.method === "GET" && url.pathname === "/api/admin/session") {
         sendJson(res, 200, { ok: true, admin: session.admin });
         return;
@@ -1232,37 +1452,42 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === "PUT" && url.pathname === "/api/admin/content") {
-        await handleAdminContentUpdate(req, res);
+        await handleAdminContentUpdate(req, res, session);
         return;
       }
 
       if (req.method === "POST" && url.pathname === "/api/admin/documents") {
-        await handleAdminDocumentUpload(req, res);
+        await handleAdminDocumentUpload(req, res, session);
         return;
       }
 
       if (req.method === "GET" && url.pathname === "/api/admin/mail-settings") {
+        if (!requireOwner(res, session)) return;
         sendJson(res, 200, { ok: true, settings: publicMailSettings(await getMailSettings()) });
         return;
       }
 
       if (req.method === "PUT" && url.pathname === "/api/admin/mail-settings") {
-        await handleMailSettingsUpdate(req, res);
+        if (!requireOwner(res, session)) return;
+        await handleMailSettingsUpdate(req, res, session);
         return;
       }
 
       if (req.method === "POST" && url.pathname === "/api/admin/mail-test") {
-        await handleMailTest(req, res);
+        if (!requireOwner(res, session)) return;
+        await handleMailTest(req, res, session);
         return;
       }
 
       if (req.method === "GET" && url.pathname === "/api/admin/admins") {
+        if (!requireOwner(res, session)) return;
         await handleAdminAccountsList(req, res);
         return;
       }
 
       if (req.method === "POST" && url.pathname === "/api/admin/admins") {
-        await handleAdminAccountCreate(req, res);
+        if (!requireOwner(res, session)) return;
+        await handleAdminAccountCreate(req, res, session);
         return;
       }
 
@@ -1280,12 +1505,13 @@ const server = http.createServer(async (req, res) => {
 
       const adminIdeaMatch = url.pathname.match(/^\/api\/admin\/ideas\/([^/]+)$/);
       if (req.method === "PATCH" && adminIdeaMatch) {
-        await handleAdminIdeaUpdate(req, res, adminIdeaMatch[1]);
+        await handleAdminIdeaUpdate(req, res, adminIdeaMatch[1], session);
         return;
       }
 
       const adminAccountMatch = url.pathname.match(/^\/api\/admin\/admins\/([^/]+)$/);
       if (req.method === "PATCH" && adminAccountMatch) {
+        if (!requireOwner(res, session)) return;
         await handleAdminAccountUpdate(req, res, adminAccountMatch[1], session);
         return;
       }
@@ -1293,6 +1519,16 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && adminPath && url.pathname === adminPath) {
       await serveFile(path.join(publicDir, "admin.html"), res, "no-cache");
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/connexion-cse") {
+      if (!adminPath) {
+        sendJson(res, 404, { ok: false, error: "not_found" });
+        return;
+      }
+      res.writeHead(302, { Location: adminPath, "Cache-Control": "no-store" });
+      res.end();
       return;
     }
 
