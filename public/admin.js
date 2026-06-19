@@ -4,6 +4,7 @@ const loginStatus = document.querySelector("[data-login-status]");
 const adminApp = document.querySelector("[data-admin-app]");
 const tabButtons = [...document.querySelectorAll("[data-tab-button]")];
 const tabPanels = [...document.querySelectorAll("[data-tab]")];
+const adminNav = document.querySelector("[data-admin-nav]");
 const pendingStat = document.querySelector("[data-admin-pending]");
 const approvedStat = document.querySelector("[data-admin-approved]");
 const progressStat = document.querySelector("[data-admin-progress]");
@@ -538,12 +539,14 @@ async function loadIdeas() {
 function showAdmin() {
   loginPanel.hidden = true;
   adminApp.hidden = false;
+  adminNav.hidden = false;
   logoutButton.hidden = false;
 }
 
 function showLogin() {
   loginPanel.hidden = false;
   adminApp.hidden = true;
+  adminNav.hidden = true;
   logoutButton.hidden = true;
 }
 

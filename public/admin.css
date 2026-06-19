@@ -3,6 +3,10 @@
   background: #f4f7f6;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .admin-header {
   position: sticky;
   z-index: 20;
