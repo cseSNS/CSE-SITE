@@ -16,13 +16,18 @@
         <span class="brand-copy">Administration</span>
       </a>
       <nav class="admin-tabs" aria-label="Sections admin">
+        <button type="button" data-tab-button="dashboard">Tableau de bord</button>
         <button type="button" data-tab-button="ideas">Id&eacute;es</button>
-        <button type="button" data-tab-button="content">Contenu</button>
-        <button type="button" data-tab-button="posts">Infos CSE</button>
+        <button type="button" data-tab-button="content">Agenda</button>
+        <button type="button" data-tab-button="posts">Articles</button>
         <button type="button" data-tab-button="documents">PV</button>
         <button type="button" data-tab-button="members">Membres</button>
+        <button type="button" data-tab-button="settings">Param&egrave;tres</button>
       </nav>
-      <a class="button button-secondary" href="/">Site public</a>
+      <div class="admin-header-actions">
+        <a class="button button-secondary" href="/">Site public</a>
+        <button class="button button-secondary" type="button" data-logout hidden>D&eacute;connexion</button>
+      </div>
     </header>
 
     <main class="admin-shell">
@@ -30,14 +35,18 @@
         <div>
           <p class="eyebrow">Acc&egrave;s membres CSE</p>
           <h1>Connexion admin</h1>
-          <p>Renseigne le jeton d'administration configur&eacute; sur le VPS.</p>
+          <p>Connecte-toi avec ton compte membre CSE pour modifier le portail, traiter les id&eacute;es et publier les documents.</p>
         </div>
         <form class="admin-login-form" data-login-form>
           <label>
-            Jeton admin
-            <input name="token" type="password" autocomplete="current-password" placeholder="ADMIN_TOKEN" required>
+            Email
+            <input name="email" type="email" autocomplete="username" placeholder="prenom.nom@entreprise.fr" required>
           </label>
-          <button class="button button-primary" type="submit">Entrer</button>
+          <label>
+            Mot de passe
+            <input name="password" type="password" autocomplete="current-password" required>
+          </label>
+          <button class="button button-primary" type="submit">Se connecter</button>
           <p class="form-status" data-login-status role="status"></p>
         </form>
       </section>
@@ -66,7 +75,33 @@
           </article>
         </div>
 
-        <section class="admin-panel is-active" data-tab="ideas">
+        <section class="admin-panel is-active" data-tab="dashboard">
+          <div class="admin-panel-heading">
+            <div>
+              <p class="eyebrow">Pilotage CSE</p>
+              <h2>Vue d'ensemble</h2>
+            </div>
+          </div>
+          <div class="dashboard-grid">
+            <article class="admin-item">
+              <h3>A traiter en priorit&eacute;</h3>
+              <p class="admin-item-meta">Les id&eacute;es en attente doivent &ecirc;tre relues avant publication et vote collaborateurs.</p>
+              <button class="button button-primary" type="button" data-shortcut-tab="ideas">Ouvrir les id&eacute;es</button>
+            </article>
+            <article class="admin-item">
+              <h3>Publier une information</h3>
+              <p class="admin-item-meta">Cr&eacute;e un article complet avec liens, images, mise en forme et statut brouillon.</p>
+              <button class="button button-secondary" type="button" data-shortcut-tab="posts">Nouvel article</button>
+            </article>
+            <article class="admin-item">
+              <h3>Communication email</h3>
+              <p class="admin-item-meta">Configure le serveur SMTP et envoie un email de test depuis l'administration.</p>
+              <button class="button button-secondary" type="button" data-shortcut-tab="settings">Configurer SMTP</button>
+            </article>
+          </div>
+        </section>
+
+        <section class="admin-panel" data-tab="ideas">
           <div class="admin-panel-heading">
             <div>
               <p class="eyebrow">Bo&icirc;te &agrave; id&eacute;es</p>
@@ -175,6 +210,85 @@
           <div class="admin-list" data-members-editor></div>
           <button class="button button-secondary" type="button" data-add-member>Ajouter un membre</button>
           <p class="form-status" data-member-status role="status"></p>
+        </section>
+
+        <section class="admin-panel" data-tab="settings">
+          <div class="admin-panel-heading">
+            <div>
+              <p class="eyebrow">Configuration</p>
+              <h2>Email et portail</h2>
+            </div>
+            <button class="button button-primary" type="button" data-save-mail>Sauvegarder SMTP</button>
+          </div>
+          <form class="admin-form settings-form" data-mail-form>
+            <label>
+              Serveur SMTP
+              <input name="host" placeholder="smtp.office365.com">
+            </label>
+            <label>
+              Port
+              <input name="port" type="number" min="1" max="65535" value="587">
+            </label>
+            <label>
+              S&eacute;curit&eacute;
+              <select name="secure">
+                <option value="false">STARTTLS / port 587</option>
+                <option value="true">SSL direct / port 465</option>
+              </select>
+            </label>
+            <label>
+              Utilisateur
+              <input name="username" autocomplete="username" placeholder="cse@entreprise.fr">
+            </label>
+            <label>
+              Mot de passe SMTP
+              <input name="password" type="password" autocomplete="new-password" placeholder="Laisser vide pour conserver l'actuel">
+            </label>
+            <label>
+              Email exp&eacute;diteur
+              <input name="fromEmail" type="email" placeholder="cse@entreprise.fr">
+            </label>
+            <label>
+              Nom exp&eacute;diteur
+              <input name="fromName" placeholder="CSE SNS Security">
+            </label>
+            <label>
+              Destinataire de test
+              <input name="testRecipient" type="email" placeholder="ton.email@entreprise.fr">
+            </label>
+            <div class="settings-actions">
+              <button class="button button-secondary" type="button" data-test-mail>Envoyer un test</button>
+            </div>
+            <p class="form-status" data-mail-status role="status"></p>
+          </form>
+          <div class="settings-block">
+            <div class="admin-panel-heading compact-heading">
+              <div>
+                <p class="eyebrow">Acc&egrave;s</p>
+                <h3>Comptes administrateurs</h3>
+              </div>
+              <button class="button button-secondary" type="button" data-refresh-admins>Rafra&icirc;chir</button>
+            </div>
+            <form class="admin-form settings-form" data-admin-account-form>
+              <label>
+                Nom affich&eacute;
+                <input name="displayName" placeholder="Valentin H.">
+              </label>
+              <label>
+                Email
+                <input name="email" type="email" placeholder="prenom.nom@entreprise.fr" required>
+              </label>
+              <label>
+                Mot de passe temporaire
+                <input name="password" type="password" minlength="12" placeholder="12 caract&egrave;res minimum" required>
+              </label>
+              <div class="settings-actions">
+                <button class="button button-primary" type="submit">Cr&eacute;er le compte</button>
+              </div>
+              <p class="form-status" data-admin-account-status role="status"></p>
+            </form>
+            <div class="admin-list" data-admin-accounts></div>
+          </div>
         </section>
       </section>
     </main>

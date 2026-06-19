@@ -64,6 +64,35 @@ function createElement(tag, className, text) {
   return element;
 }
 
+function renderRichText(container, value) {
+  const html = String(value || "");
+  if (!/<[a-z][\s\S]*>/i.test(html)) {
+    html.split(/\n{2,}/).filter(Boolean).forEach((paragraph) => {
+      container.append(createElement("p", "", paragraph));
+    });
+    return;
+  }
+
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const allowedTags = new Set(["P", "BR", "STRONG", "B", "EM", "I", "U", "A", "UL", "OL", "LI", "H2", "H3", "BLOCKQUOTE", "IMG"]);
+  const allowedAttrs = new Set(["href", "src", "alt", "target", "rel"]);
+  template.content.querySelectorAll("*").forEach((node) => {
+    if (!allowedTags.has(node.tagName)) {
+      node.replaceWith(document.createTextNode(node.textContent || ""));
+      return;
+    }
+    [...node.attributes].forEach((attribute) => {
+      if (!allowedAttrs.has(attribute.name)) node.removeAttribute(attribute.name);
+    });
+    if (node.tagName === "A") {
+      node.target = "_blank";
+      node.rel = "noopener noreferrer";
+    }
+  });
+  container.append(template.content.cloneNode(true));
+}
+
 function getLimit(element, fallback) {
   const limit = Number(element?.dataset.limit || 0);
   return limit > 0 ? limit : fallback;
@@ -120,9 +149,7 @@ function renderPosts(items) {
     article.append(createElement("h3", "", item.title));
     if (item.excerpt) article.append(createElement("p", "post-excerpt", item.excerpt));
     const body = createElement("div", "post-body");
-    String(item.body || "").split(/\n{2,}/).filter(Boolean).forEach((paragraph) => {
-      body.append(createElement("p", "", paragraph));
-    });
+    renderRichText(body, item.body);
     article.append(body);
     postList.append(article);
   });

@@ -39,6 +39,13 @@
   color: var(--teal-dark);
 }
 
+.admin-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: end;
+}
+
 .admin-shell {
   width: min(1240px, calc(100% - 32px));
   margin: 0 auto;
@@ -102,6 +109,43 @@
   padding: 12px;
 }
 
+.rich-field {
+  display: grid;
+  gap: 8px;
+}
+
+.rich-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rich-toolbar .button {
+  min-height: 34px;
+  padding: 7px 10px;
+}
+
+.rich-editor {
+  min-height: 230px;
+  overflow: auto;
+  border: 1px solid #cbd7de;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  outline: none;
+  padding: 14px;
+}
+
+.rich-editor:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(41, 132, 124, 0.12);
+}
+
+.rich-editor img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
 .admin-app {
   padding: 18px;
 }
@@ -155,6 +199,12 @@
 .admin-list {
   display: grid;
   gap: 12px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
 }
 
 .admin-toolbar {
@@ -255,6 +305,31 @@
   gap: 10px;
 }
 
+.settings-form {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.settings-actions,
+.settings-form .form-status {
+  grid-column: 1 / -1;
+}
+
+.settings-block {
+  display: grid;
+  gap: 16px;
+  margin-top: 26px;
+  border-top: 1px solid var(--line);
+  padding-top: 22px;
+}
+
+.compact-heading {
+  margin-bottom: 0;
+}
+
+.compact-heading h3 {
+  margin: 0;
+}
+
 .member-preview {
   display: flex;
   align-items: center;
@@ -274,8 +349,10 @@
   .admin-header,
   .admin-login,
   .editor-grid,
+  .dashboard-grid,
   .admin-summary,
   .admin-toolbar,
+  .settings-form,
   .member-editor-grid {
     grid-template-columns: 1fr;
   }

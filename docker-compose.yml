@@ -30,8 +30,11 @@ services:
       PORT: "8080"
       DATA_DIR: "/data"
       DATABASE_URL: "postgres://${POSTGRES_USER:-cse}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cse}"
-      ADMIN_TOKEN: "${ADMIN_TOKEN:?set ADMIN_TOKEN in .env or Portainer}"
       ADMIN_PATH: "${ADMIN_PATH:?set ADMIN_PATH in .env or Portainer}"
+      ADMIN_BOOTSTRAP_EMAIL: "${ADMIN_BOOTSTRAP_EMAIL:?set ADMIN_BOOTSTRAP_EMAIL in .env or Portainer}"
+      ADMIN_BOOTSTRAP_PASSWORD: "${ADMIN_BOOTSTRAP_PASSWORD:?set ADMIN_BOOTSTRAP_PASSWORD in .env or Portainer}"
+      ADMIN_BOOTSTRAP_NAME: "${ADMIN_BOOTSTRAP_NAME:-Administrateur CSE}"
+      COOKIE_SECURE: "${COOKIE_SECURE:-true}"
       CSE_NOTIFICATION_WEBHOOK: "${CSE_NOTIFICATION_WEBHOOK:-}"
     volumes:
       - cse_data:/data

@@ -22,11 +22,17 @@ const contentStatus = document.querySelector("[data-content-status]");
 const postStatus = document.querySelector("[data-post-status]");
 const documentStatus = document.querySelector("[data-document-status]");
 const memberStatus = document.querySelector("[data-member-status]");
+const mailStatus = document.querySelector("[data-mail-status]");
 const documentForm = document.querySelector("[data-document-form]");
+const mailForm = document.querySelector("[data-mail-form]");
+const adminAccountForm = document.querySelector("[data-admin-account-form]");
+const adminAccountsContainer = document.querySelector("[data-admin-accounts]");
+const adminAccountStatus = document.querySelector("[data-admin-account-status]");
+const logoutButton = document.querySelector("[data-logout]");
 
-let token = localStorage.getItem("cse-admin-token") || "";
 let content = { news: [], posts: [], meetings: [], documents: [], members: [] };
 let ideas = [];
+let adminAccounts = [];
 
 function setMessage(element, message, state = "") {
   if (!element) return;
@@ -39,12 +45,13 @@ function uid(prefix) {
 }
 
 function request(path, options = {}) {
+  const hasJsonBody = typeof options.body === "string";
   return fetch(path, {
     ...options,
+    credentials: "same-origin",
     headers: {
       Accept: "application/json",
-      "Content-Type": "application/json",
-      "X-Admin-Token": token,
+      ...(hasJsonBody ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {})
     }
   });
@@ -83,8 +90,63 @@ function field(label, value = "", options = {}) {
   return wrapper;
 }
 
+function richField(label, value = "", key = "body") {
+  const wrapper = createElement("div", "admin-field rich-field");
+  const title = createElement("span", "", label);
+  const toolbar = createElement("div", "rich-toolbar");
+  [
+    ["bold", "B"],
+    ["italic", "I"],
+    ["underline", "U"],
+    ["insertUnorderedList", "Liste"],
+    ["formatBlock", "Titre"],
+    ["createLink", "Lien"],
+    ["insertImage", "Image"]
+  ].forEach(([command, text]) => {
+    const button = createElement("button", "button button-secondary", text);
+    button.type = "button";
+    button.dataset.command = command;
+    toolbar.append(button);
+  });
+
+  const editor = createElement("div", "rich-editor");
+  editor.contentEditable = "true";
+  editor.dataset.key = key;
+  editor.innerHTML = value || "";
+
+  toolbar.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-command]");
+    if (!button) return;
+    editor.focus();
+    const command = button.dataset.command;
+    if (command === "createLink") {
+      const url = prompt("Adresse du lien");
+      if (url) document.execCommand(command, false, url);
+      return;
+    }
+    if (command === "insertImage") {
+      const url = prompt("Adresse de l'image");
+      if (url) document.execCommand(command, false, url);
+      return;
+    }
+    if (command === "formatBlock") {
+      document.execCommand(command, false, "h3");
+      return;
+    }
+    document.execCommand(command, false, null);
+  });
+
+  wrapper.append(title, toolbar, editor);
+  return wrapper;
+}
+
 function getInput(card, key) {
   return card.querySelector(`[data-key="${key}"]`)?.value.trim() || "";
+}
+
+function getRichInput(card, key) {
+  const editor = card.querySelector(`.rich-editor[data-key="${key}"]`);
+  return editor ? editor.innerHTML.trim() : getInput(card, key);
 }
 
 function activateTab(name) {
@@ -93,6 +155,7 @@ function activateTab(name) {
 }
 
 tabButtons.forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tabButton)));
+document.querySelectorAll("[data-shortcut-tab]").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.shortcutTab)));
 
 function ideaStatusLabel(status) {
   if (status === "approved") return "Validee";
@@ -198,7 +261,7 @@ function editorCard(type, item) {
       field("Mise en avant", item.featured ? "yes" : "no", { key: "featured", type: "select", choices: ["no", "yes"] }),
       field("Date", item.date, { key: "date", type: "date" }),
       field("Resume", item.excerpt, { key: "excerpt", type: "textarea", rows: 3 }),
-      field("Contenu", item.body, { key: "body", type: "textarea", rows: 8 }),
+      richField("Contenu", item.body, "body"),
       actions
     );
   }
@@ -312,7 +375,7 @@ function gatherPosts() {
     featured: getInput(card, "featured") === "yes",
     date: getInput(card, "date"),
     excerpt: getInput(card, "excerpt"),
-    body: getInput(card, "body")
+    body: getRichInput(card, "body")
   })).filter((item) => item.title && item.body);
 }
 
@@ -367,7 +430,7 @@ async function openDocument(item) {
     return;
   }
 
-  const response = await fetch(item.url, { headers: { "X-Admin-Token": token } });
+  const response = await fetch(item.url, { credentials: "same-origin" });
   if (!response.ok) return;
   const blob = await response.blob();
   const blobUrl = URL.createObjectURL(blob);
@@ -472,24 +535,164 @@ async function loadIdeas() {
   await loadStats();
 }
 
-async function enterAdmin(candidateToken) {
-  token = candidateToken;
-  const response = await request("/api/admin/session");
-  if (!response.ok) {
-    setMessage(loginStatus, "Jeton invalide.", "error");
-    return;
-  }
-  localStorage.setItem("cse-admin-token", token);
+function showAdmin() {
   loginPanel.hidden = true;
   adminApp.hidden = false;
-  activateTab("ideas");
-  await Promise.all([loadContent(), loadIdeas(), loadStats()]);
+  logoutButton.hidden = false;
+}
+
+function showLogin() {
+  loginPanel.hidden = false;
+  adminApp.hidden = true;
+  logoutButton.hidden = true;
+}
+
+async function loadMailSettings() {
+  if (!mailForm) return;
+  const response = await request("/api/admin/mail-settings");
+  if (!response.ok) return;
+  const payload = await response.json();
+  const settings = payload.settings || {};
+  mailForm.elements.host.value = settings.host || "";
+  mailForm.elements.port.value = settings.port || 587;
+  mailForm.elements.secure.value = String(Boolean(settings.secure));
+  mailForm.elements.username.value = settings.username || "";
+  mailForm.elements.password.value = "";
+  mailForm.elements.fromEmail.value = settings.fromEmail || "";
+  mailForm.elements.fromName.value = settings.fromName || "";
+}
+
+async function saveMailSettings() {
+  const formData = new FormData(mailForm);
+  const response = await request("/api/admin/mail-settings", {
+    method: "PUT",
+    body: JSON.stringify({
+      host: formData.get("host"),
+      port: Number(formData.get("port") || 587),
+      secure: formData.get("secure") === "true",
+      username: formData.get("username"),
+      password: formData.get("password"),
+      fromEmail: formData.get("fromEmail"),
+      fromName: formData.get("fromName")
+    })
+  });
+  if (!response.ok) {
+    setMessage(mailStatus, "Configuration SMTP impossible a sauvegarder.", "error");
+    return;
+  }
+  mailForm.elements.password.value = "";
+  setMessage(mailStatus, "Configuration SMTP sauvegardee.", "success");
+}
+
+async function testMail() {
+  const recipient = new FormData(mailForm).get("testRecipient");
+  setMessage(mailStatus, "Envoi du test en cours...", "");
+  const response = await request("/api/admin/mail-test", {
+    method: "POST",
+    body: JSON.stringify({ recipient })
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    setMessage(mailStatus, payload.message ? `Test impossible: ${payload.message}` : "Test email impossible.", "error");
+    return;
+  }
+  setMessage(mailStatus, "Email de test envoye.", "success");
+}
+
+function renderAdminAccounts() {
+  if (!adminAccountsContainer) return;
+  adminAccountsContainer.replaceChildren(...adminAccounts.map((admin) => {
+    const card = createElement("article", "admin-item");
+    const header = createElement("div", "admin-item-header");
+    const copy = createElement("div");
+    copy.append(createElement("h3", "", admin.displayName || admin.email));
+    copy.append(createElement("p", "admin-item-meta", `${admin.email} - ${admin.active ? "Actif" : "Desactive"} - ${admin.lastLoginAt ? new Date(admin.lastLoginAt).toLocaleString("fr-FR") : "Jamais connecte"}`));
+    header.append(copy);
+    const actions = createElement("div", "admin-actions");
+    const toggle = createElement("button", admin.active ? "button button-danger" : "button button-success", admin.active ? "Desactiver" : "Reactiver");
+    toggle.type = "button";
+    toggle.addEventListener("click", () => updateAdminAccount(admin.id, { displayName: admin.displayName, active: !admin.active }));
+    const password = createElement("button", "button button-secondary", "Changer mot de passe");
+    password.type = "button";
+    password.addEventListener("click", () => {
+      const nextPassword = prompt("Nouveau mot de passe admin (12 caracteres minimum)");
+      if (nextPassword) updateAdminAccount(admin.id, { displayName: admin.displayName, active: admin.active, password: nextPassword });
+    });
+    actions.append(toggle, password);
+    header.append(actions);
+    card.append(header);
+    return card;
+  }));
+}
+
+async function loadAdminAccounts() {
+  const response = await request("/api/admin/admins");
+  if (!response.ok) return;
+  const payload = await response.json();
+  adminAccounts = payload.admins || [];
+  renderAdminAccounts();
+}
+
+async function createAdminAccount(event) {
+  event.preventDefault();
+  const formData = new FormData(adminAccountForm);
+  const response = await request("/api/admin/admins", {
+    method: "POST",
+    body: JSON.stringify({
+      displayName: formData.get("displayName"),
+      email: formData.get("email"),
+      password: formData.get("password")
+    })
+  });
+  if (!response.ok) {
+    setMessage(adminAccountStatus, "Creation impossible. Verifie l'email et le mot de passe.", "error");
+    return;
+  }
+  adminAccountForm.reset();
+  setMessage(adminAccountStatus, "Compte admin cree.", "success");
+  await loadAdminAccounts();
+}
+
+async function updateAdminAccount(id, payload) {
+  const response = await request(`/api/admin/admins/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    setMessage(adminAccountStatus, "Modification du compte impossible.", "error");
+    return;
+  }
+  setMessage(adminAccountStatus, "Compte admin mis a jour.", "success");
+  await loadAdminAccounts();
+}
+
+async function bootAdmin() {
+  const response = await request("/api/admin/session");
+  if (!response.ok) {
+    showLogin();
+    return;
+  }
+  showAdmin();
+  activateTab("dashboard");
+  await Promise.all([loadContent(), loadIdeas(), loadStats(), loadMailSettings(), loadAdminAccounts()]);
+}
+
+async function loginAdmin(email, password) {
+  const response = await request("/api/admin/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password })
+  });
+  if (!response.ok) {
+    setMessage(loginStatus, response.status === 503 ? "Aucun compte admin initialise sur le serveur." : "Email ou mot de passe incorrect.", "error");
+    return;
+  }
+  await bootAdmin();
 }
 
 loginForm?.addEventListener("submit", (event) => {
   event.preventDefault();
-  const candidateToken = new FormData(loginForm).get("token");
-  enterAdmin(String(candidateToken || ""));
+  const formData = new FormData(loginForm);
+  loginAdmin(String(formData.get("email") || ""), String(formData.get("password") || ""));
 });
 
 document.querySelector("[data-refresh]")?.addEventListener("click", () => loadIdeas());
@@ -503,12 +706,14 @@ document.querySelector("[data-add-member]")?.addEventListener("click", () => mem
 document.querySelector("[data-save-content]")?.addEventListener("click", () => saveContent(contentStatus));
 document.querySelector("[data-save-posts]")?.addEventListener("click", () => saveContent(postStatus));
 document.querySelector("[data-save-members]")?.addEventListener("click", () => saveContent(memberStatus));
+document.querySelector("[data-save-mail]")?.addEventListener("click", saveMailSettings);
+document.querySelector("[data-test-mail]")?.addEventListener("click", testMail);
+document.querySelector("[data-refresh-admins]")?.addEventListener("click", loadAdminAccounts);
 documentForm?.addEventListener("submit", uploadDocument);
+adminAccountForm?.addEventListener("submit", createAdminAccount);
+logoutButton?.addEventListener("click", async () => {
+  await request("/api/admin/logout", { method: "POST" });
+  showLogin();
+});
 
-if (token) {
-  enterAdmin(token).catch(() => {
-    localStorage.removeItem("cse-admin-token");
-    loginPanel.hidden = false;
-    adminApp.hidden = true;
-  });
-}
+bootAdmin().catch(showLogin);

@@ -1,8 +1,9 @@
 import http from "node:http";
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 
@@ -13,14 +14,18 @@ const publicDir = path.join(__dirname, "public");
 const dataDir = process.env.DATA_DIR || path.join(__dirname, "data");
 const uploadsDir = path.join(dataDir, "uploads");
 const port = Number(process.env.PORT || 8080);
-const adminToken = process.env.ADMIN_TOKEN || "";
 const adminPath = process.env.ADMIN_PATH ? normalizeAdminPath(process.env.ADMIN_PATH) : "";
 const notificationWebhook = process.env.CSE_NOTIFICATION_WEBHOOK || "";
 const databaseUrl = process.env.DATABASE_URL || "";
+const bootstrapAdminEmail = process.env.ADMIN_BOOTSTRAP_EMAIL || "";
+const bootstrapAdminPassword = process.env.ADMIN_BOOTSTRAP_PASSWORD || "";
+const bootstrapAdminName = process.env.ADMIN_BOOTSTRAP_NAME || "Administrateur CSE";
+const sessionMaxAgeSeconds = 8 * 60 * 60;
 if (!databaseUrl) {
   throw new Error("DATABASE_URL is required. Configure PostgreSQL before starting cse-site.");
 }
 const dbPool = new Pool({ connectionString: databaseUrl });
+const scryptAsync = promisify(scrypt);
 
 const ideaStatuses = new Set(["pending", "approved", "in_progress", "treated", "rejected"]);
 const publicIdeaStatuses = new Set(["approved", "in_progress"]);
@@ -206,7 +211,7 @@ function setSecurityHeaders(res) {
     "Content-Security-Policy",
     [
       "default-src 'self'",
-      "img-src 'self' https://images.unsplash.com https://plus.unsplash.com data:",
+      "img-src 'self' https: data:",
       "style-src 'self'",
       "script-src 'self'",
       "connect-src 'self'",
@@ -273,17 +278,76 @@ function normalizeAdminPath(value) {
   return /^\/[a-zA-Z0-9][a-zA-Z0-9/_-]{8,120}$/.test(withSlash) ? withSlash : "";
 }
 
-function requireAdmin(req, res) {
-  if (!adminToken || adminToken.length < 48) {
-    sendJson(res, 503, { ok: false, error: "admin_not_configured" });
-    return false;
-  }
-  const token = req.headers["x-admin-token"];
-  if (!safeEqual(token, adminToken)) {
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  return Object.fromEntries(header.split(";").map((part) => {
+    const [name, ...value] = part.trim().split("=");
+    return [decodeURIComponent(name || ""), decodeURIComponent(value.join("=") || "")];
+  }).filter(([name]) => name));
+}
+
+function cookieHeader(name, value, options = {}) {
+  const parts = [`${encodeURIComponent(name)}=${encodeURIComponent(value)}`, "HttpOnly", "SameSite=Lax", "Path=/"];
+  if (options.maxAge !== undefined) parts.push(`Max-Age=${options.maxAge}`);
+  if (options.secure) parts.push("Secure");
+  return parts.join("; ");
+}
+
+function isSecureRequest(req) {
+  return process.env.COOKIE_SECURE === "true" || req.headers["x-forwarded-proto"] === "https";
+}
+
+function hashSessionToken(token) {
+  return createHash("sha256").update(String(token || "")).digest("hex");
+}
+
+async function hashPassword(password) {
+  const salt = randomBytes(16).toString("hex");
+  const hash = await scryptAsync(String(password), salt, 64);
+  return `scrypt$${salt}$${Buffer.from(hash).toString("hex")}`;
+}
+
+async function verifyPassword(password, storedHash) {
+  const [scheme, salt, expected] = String(storedHash || "").split("$");
+  if (scheme !== "scrypt" || !salt || !expected) return false;
+  const derived = await scryptAsync(String(password), salt, 64);
+  return safeEqual(Buffer.from(derived).toString("hex"), expected);
+}
+
+function publicAdminAccount(row) {
+  return {
+    id: row.id,
+    email: row.email,
+    displayName: row.display_name,
+    role: row.role,
+    lastLoginAt: row.last_login_at?.toISOString?.() || row.last_login_at || ""
+  };
+}
+
+async function getAdminSession(req) {
+  const token = parseCookies(req).cse_admin_session;
+  if (!token) return null;
+  const tokenHash = hashSessionToken(token);
+  const result = await dbPool.query(
+    `SELECT s.id AS session_id, a.*
+     FROM admin_sessions s
+     JOIN admin_accounts a ON a.id = s.admin_id
+     WHERE s.session_token_hash = $1
+       AND s.expires_at > now()
+       AND a.active = true`,
+    [tokenHash]
+  );
+  if (!result.rows.length) return null;
+  return { sessionId: result.rows[0].session_id, tokenHash, admin: publicAdminAccount(result.rows[0]) };
+}
+
+async function requireAdmin(req, res) {
+  const session = await getAdminSession(req);
+  if (!session) {
     sendJson(res, 401, { ok: false, error: "unauthorized" });
-    return false;
+    return null;
   }
-  return true;
+  return session;
 }
 
 function getClientKey(req) {
@@ -443,14 +507,29 @@ async function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS admin_accounts (
       id text PRIMARY KEY,
       email text UNIQUE NOT NULL,
+      password_hash text NOT NULL DEFAULT '',
       display_name text NOT NULL DEFAULT '',
       role text NOT NULL DEFAULT 'member',
       provider text NOT NULL DEFAULT 'local',
       provider_subject text NOT NULL DEFAULT '',
       active boolean NOT NULL DEFAULT true,
+      last_login_at timestamptz,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     );
+
+    ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS password_hash text NOT NULL DEFAULT '';
+    ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS last_login_at timestamptz;
+
+    CREATE TABLE IF NOT EXISTS admin_sessions (
+      id text PRIMARY KEY,
+      admin_id text NOT NULL REFERENCES admin_accounts(id) ON DELETE CASCADE,
+      session_token_hash text UNIQUE NOT NULL,
+      expires_at timestamptz NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS admin_sessions_expires_at_idx ON admin_sessions (expires_at);
 
     CREATE TABLE IF NOT EXISTS email_outbox (
       id text PRIMARY KEY,
@@ -462,7 +541,20 @@ async function initializeDatabase() {
       created_at timestamptz NOT NULL DEFAULT now(),
       sent_at timestamptz
     );
+
+    CREATE TABLE IF NOT EXISTS mail_settings (
+      id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      host text NOT NULL DEFAULT '',
+      port integer NOT NULL DEFAULT 587,
+      secure boolean NOT NULL DEFAULT false,
+      username text NOT NULL DEFAULT '',
+      password text NOT NULL DEFAULT '',
+      from_email text NOT NULL DEFAULT '',
+      from_name text NOT NULL DEFAULT 'CSE',
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
   `);
+  await seedBootstrapAdmin();
 }
 
 async function seedDefaultContent() {
@@ -470,6 +562,19 @@ async function seedDefaultContent() {
   if (contentCount === 0) {
     await saveContentToDatabase(defaultContent);
   }
+}
+
+async function seedBootstrapAdmin() {
+  const count = Number((await dbPool.query("SELECT count(*)::int AS count FROM admin_accounts")).rows[0].count);
+  if (count > 0 || !bootstrapAdminEmail || !bootstrapAdminPassword) return;
+  if (bootstrapAdminPassword.length < 12) {
+    throw new Error("ADMIN_BOOTSTRAP_PASSWORD must be at least 12 characters.");
+  }
+  await dbPool.query(
+    `INSERT INTO admin_accounts (id, email, password_hash, display_name, role, provider)
+     VALUES ($1, $2, $3, $4, 'admin', 'local')`,
+    [randomUUID(), cleanText(bootstrapAdminEmail.toLowerCase(), 180), await hashPassword(bootstrapAdminPassword), cleanText(bootstrapAdminName, 120)]
+  );
 }
 
 async function getContentFromDatabase() {
@@ -660,6 +765,242 @@ async function handleIdeaVote(req, res, ideaId) {
   sendJson(res, 200, { ok: true, idea: publicIdea(idea) });
 }
 
+async function handleAdminLogin(req, res) {
+  let body;
+  try {
+    body = JSON.parse(await readBody(req, 8_000));
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid_payload" });
+    return;
+  }
+
+  const email = cleanText(body.email, 180).toLowerCase();
+  const password = String(body.password || "");
+  const adminCount = Number((await dbPool.query("SELECT count(*)::int AS count FROM admin_accounts")).rows[0].count);
+  if (adminCount === 0) {
+    sendJson(res, 503, { ok: false, error: "admin_not_configured" });
+    return;
+  }
+
+  const result = await dbPool.query("SELECT * FROM admin_accounts WHERE email = $1 AND active = true", [email]);
+  const row = result.rows[0];
+  if (!row || !(await verifyPassword(password, row.password_hash))) {
+    sendJson(res, 401, { ok: false, error: "invalid_credentials" });
+    return;
+  }
+
+  const sessionToken = randomBytes(32).toString("base64url");
+  await dbPool.query("DELETE FROM admin_sessions WHERE expires_at <= now()");
+  await dbPool.query(
+    `INSERT INTO admin_sessions (id, admin_id, session_token_hash, expires_at)
+     VALUES ($1, $2, $3, now() + ($4 || ' seconds')::interval)`,
+    [randomUUID(), row.id, hashSessionToken(sessionToken), sessionMaxAgeSeconds]
+  );
+  await dbPool.query("UPDATE admin_accounts SET last_login_at = now(), updated_at = now() WHERE id = $1", [row.id]);
+  res.setHeader("Set-Cookie", cookieHeader("cse_admin_session", sessionToken, { maxAge: sessionMaxAgeSeconds, secure: isSecureRequest(req) }));
+  sendJson(res, 200, { ok: true, admin: publicAdminAccount({ ...row, last_login_at: new Date() }) });
+}
+
+async function handleAdminLogout(req, res, session) {
+  if (session?.tokenHash) {
+    await dbPool.query("DELETE FROM admin_sessions WHERE session_token_hash = $1", [session.tokenHash]);
+  }
+  res.setHeader("Set-Cookie", cookieHeader("cse_admin_session", "", { maxAge: 0, secure: isSecureRequest(req) }));
+  sendJson(res, 200, { ok: true });
+}
+
+function normalizeMailSettings(row) {
+  return {
+    host: cleanText(row?.host, 200),
+    port: Number(row?.port || 587),
+    secure: Boolean(row?.secure),
+    username: cleanText(row?.username, 200),
+    password: String(row?.password || ""),
+    fromEmail: cleanText(row?.from_email, 200),
+    fromName: cleanText(row?.from_name, 120) || "CSE"
+  };
+}
+
+async function getMailSettings() {
+  const result = await dbPool.query("SELECT * FROM mail_settings WHERE id = 1");
+  return normalizeMailSettings(result.rows[0] || {});
+}
+
+function publicMailSettings(settings) {
+  return {
+    host: settings.host,
+    port: settings.port,
+    secure: settings.secure,
+    username: settings.username,
+    fromEmail: settings.fromEmail,
+    fromName: settings.fromName,
+    hasPassword: Boolean(settings.password)
+  };
+}
+
+async function handleMailSettingsUpdate(req, res) {
+  let body;
+  try {
+    body = JSON.parse(await readBody(req, 20_000));
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid_payload" });
+    return;
+  }
+
+  const current = await getMailSettings();
+  const settings = {
+    host: cleanText(body.host, 200),
+    port: Math.min(Math.max(Number(body.port || 587), 1), 65535),
+    secure: Boolean(body.secure),
+    username: cleanText(body.username, 200),
+    password: String(body.password || "") || current.password,
+    fromEmail: cleanText(body.fromEmail, 200),
+    fromName: cleanText(body.fromName, 120) || "CSE"
+  };
+
+  await dbPool.query(
+    `INSERT INTO mail_settings (id, host, port, secure, username, password, from_email, from_name, updated_at)
+     VALUES (1, $1, $2, $3, $4, $5, $6, $7, now())
+     ON CONFLICT (id) DO UPDATE SET
+       host = EXCLUDED.host,
+       port = EXCLUDED.port,
+       secure = EXCLUDED.secure,
+       username = EXCLUDED.username,
+       password = EXCLUDED.password,
+       from_email = EXCLUDED.from_email,
+       from_name = EXCLUDED.from_name,
+       updated_at = now()`,
+    [settings.host, settings.port, settings.secure, settings.username, settings.password, settings.fromEmail, settings.fromName]
+  );
+
+  sendJson(res, 200, { ok: true, settings: publicMailSettings(settings) });
+}
+
+async function sendConfiguredMail({ to, subject, text, html }) {
+  const settings = await getMailSettings();
+  if (!settings.host || !settings.fromEmail || !to) {
+    throw new Error("mail_not_configured");
+  }
+  const nodemailer = await import("nodemailer");
+  const transporter = nodemailer.default.createTransport({
+    host: settings.host,
+    port: settings.port,
+    secure: settings.secure,
+    auth: settings.username ? { user: settings.username, pass: settings.password } : undefined
+  });
+  const from = settings.fromName ? `"${settings.fromName.replace(/"/g, "'")}" <${settings.fromEmail}>` : settings.fromEmail;
+  await transporter.sendMail({ from, to, subject, text, html });
+}
+
+async function handleMailTest(req, res) {
+  let body;
+  try {
+    body = JSON.parse(await readBody(req, 4_000));
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid_payload" });
+    return;
+  }
+
+  const recipient = cleanText(body.recipient, 200);
+  try {
+    await sendConfiguredMail({
+      to: recipient,
+      subject: "Test email portail CSE",
+      text: "Ceci est un email de test envoye depuis l'administration du portail CSE.",
+      html: "<p>Ceci est un email de test envoye depuis l'administration du portail CSE.</p>"
+    });
+    await dbPool.query(
+      "INSERT INTO email_outbox (id, type, recipient, subject, status, sent_at) VALUES ($1, 'test', $2, $3, 'sent', now())",
+      [randomUUID(), recipient, "Test email portail CSE"]
+    );
+    sendJson(res, 200, { ok: true });
+  } catch (error) {
+    await dbPool.query(
+      "INSERT INTO email_outbox (id, type, recipient, subject, payload, status) VALUES ($1, 'test', $2, $3, $4::jsonb, 'failed')",
+      [randomUUID(), recipient, "Test email portail CSE", JSON.stringify({ error: error.message })]
+    );
+    sendJson(res, 422, { ok: false, error: "mail_failed", message: error.message });
+  }
+}
+
+async function handleAdminAccountsList(req, res) {
+  const result = await dbPool.query("SELECT * FROM admin_accounts ORDER BY created_at ASC");
+  sendJson(res, 200, { ok: true, admins: result.rows.map((row) => ({ ...publicAdminAccount(row), active: row.active })) });
+}
+
+async function handleAdminAccountCreate(req, res) {
+  let body;
+  try {
+    body = JSON.parse(await readBody(req, 12_000));
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid_payload" });
+    return;
+  }
+  const email = cleanText(body.email, 180).toLowerCase();
+  const displayName = cleanText(body.displayName, 120);
+  const password = String(body.password || "");
+  if (!email || !email.includes("@") || password.length < 12) {
+    sendJson(res, 422, { ok: false, error: "invalid_admin_account" });
+    return;
+  }
+  try {
+    const result = await dbPool.query(
+      `INSERT INTO admin_accounts (id, email, password_hash, display_name, role, provider)
+       VALUES ($1, $2, $3, $4, 'admin', 'local')
+       RETURNING *`,
+      [randomUUID(), email, await hashPassword(password), displayName || email]
+    );
+    sendJson(res, 201, { ok: true, admin: { ...publicAdminAccount(result.rows[0]), active: result.rows[0].active } });
+  } catch (error) {
+    sendJson(res, 409, { ok: false, error: "admin_account_exists", message: error.message });
+  }
+}
+
+async function handleAdminAccountUpdate(req, res, accountId, session) {
+  let body;
+  try {
+    body = JSON.parse(await readBody(req, 12_000));
+  } catch {
+    sendJson(res, 400, { ok: false, error: "invalid_payload" });
+    return;
+  }
+  const displayName = cleanText(body.displayName, 120);
+  const active = body.active !== false;
+  const password = String(body.password || "");
+  if (accountId === session.admin.id && !active) {
+    sendJson(res, 422, { ok: false, error: "cannot_disable_self" });
+    return;
+  }
+  if (password && password.length < 12) {
+    sendJson(res, 422, { ok: false, error: "password_too_short" });
+    return;
+  }
+
+  const result = password
+    ? await dbPool.query(
+      `UPDATE admin_accounts
+       SET display_name = $2, active = $3, password_hash = $4, updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [accountId, displayName, active, await hashPassword(password)]
+    )
+    : await dbPool.query(
+      `UPDATE admin_accounts
+       SET display_name = $2, active = $3, updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [accountId, displayName, active]
+    );
+  if (!result.rows.length) {
+    sendJson(res, 404, { ok: false, error: "not_found" });
+    return;
+  }
+  if (!active) {
+    await dbPool.query("DELETE FROM admin_sessions WHERE admin_id = $1", [accountId]);
+  }
+  sendJson(res, 200, { ok: true, admin: { ...publicAdminAccount(result.rows[0]), active: result.rows[0].active } });
+}
+
 async function handleAdminIdeaUpdate(req, res, ideaId) {
   let body;
   try {
@@ -790,7 +1131,7 @@ async function serveUpload(req, res) {
   try {
     const content = await getContent();
     const document = content.documents.find((item) => item.url === `/uploads/${fileName}`);
-    if (document?.visibility === "private" && (!adminToken || adminToken.length < 48 || !safeEqual(req.headers["x-admin-token"], adminToken))) {
+    if (document?.visibility === "private" && !(await getAdminSession(req))) {
       sendJson(res, 404, { ok: false, error: "not_found" });
       return;
     }
@@ -866,11 +1207,22 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/admin/login") {
+      await handleAdminLogin(req, res);
+      return;
+    }
+
     if (url.pathname.startsWith("/api/admin/")) {
-      if (!requireAdmin(req, res)) return;
+      const session = await requireAdmin(req, res);
+      if (!session) return;
 
       if (req.method === "GET" && url.pathname === "/api/admin/session") {
-        sendJson(res, 200, { ok: true });
+        sendJson(res, 200, { ok: true, admin: session.admin });
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/admin/logout") {
+        await handleAdminLogout(req, res, session);
         return;
       }
 
@@ -889,6 +1241,31 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (req.method === "GET" && url.pathname === "/api/admin/mail-settings") {
+        sendJson(res, 200, { ok: true, settings: publicMailSettings(await getMailSettings()) });
+        return;
+      }
+
+      if (req.method === "PUT" && url.pathname === "/api/admin/mail-settings") {
+        await handleMailSettingsUpdate(req, res);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/admin/mail-test") {
+        await handleMailTest(req, res);
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/admin/admins") {
+        await handleAdminAccountsList(req, res);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/admin/admins") {
+        await handleAdminAccountCreate(req, res);
+        return;
+      }
+
       if (req.method === "GET" && url.pathname === "/api/admin/ideas.csv") {
         const db = await getIdeasDb();
         sendText(res, 200, "text/csv; charset=utf-8", ideasToCsv(db.ideas), `idees-cse-${new Date().toISOString().slice(0, 10)}.csv`);
@@ -904,6 +1281,12 @@ const server = http.createServer(async (req, res) => {
       const adminIdeaMatch = url.pathname.match(/^\/api\/admin\/ideas\/([^/]+)$/);
       if (req.method === "PATCH" && adminIdeaMatch) {
         await handleAdminIdeaUpdate(req, res, adminIdeaMatch[1]);
+        return;
+      }
+
+      const adminAccountMatch = url.pathname.match(/^\/api\/admin\/admins\/([^/]+)$/);
+      if (req.method === "PATCH" && adminAccountMatch) {
+        await handleAdminAccountUpdate(req, res, adminAccountMatch[1], session);
         return;
       }
     }

@@ -24,15 +24,18 @@ Le service expose le port `8080` uniquement sur `127.0.0.1`. Nginx doit faire le
 Les documents uploades restent dans le volume Docker `cse_data`.
 Les contenus, idees et futurs objets applicatifs sont stockes dans PostgreSQL.
 
-Avant une mise en production, configure `ADMIN_TOKEN` et `ADMIN_PATH` dans Portainer ou dans un fichier `.env` non versionne.
-Le serveur refuse l'API admin si `ADMIN_TOKEN` est absent ou trop court.
+Avant une mise en production, configure `ADMIN_PATH`, `ADMIN_BOOTSTRAP_EMAIL` et `ADMIN_BOOTSTRAP_PASSWORD` dans Portainer ou dans un fichier `.env` non versionne.
+Au premier demarrage, le serveur cree un compte administrateur local si aucun compte admin n'existe encore.
 `CSE_NOTIFICATION_WEBHOOK` peut etre renseigne pour notifier un outil externe lors d'une nouvelle idee ou d'un nouveau document.
 
 Variables minimales:
 
 ```env
-ADMIN_TOKEN=un-token-long-et-secret
 ADMIN_PATH=/une-url-admin-privee
+ADMIN_BOOTSTRAP_EMAIL=cse-admin@entreprise.fr
+ADMIN_BOOTSTRAP_PASSWORD=un-mot-de-passe-admin-long
+ADMIN_BOOTSTRAP_NAME=Administrateur CSE
+COOKIE_SECURE=true
 POSTGRES_DB=cse
 POSTGRES_USER=cse
 POSTGRES_PASSWORD=un-mot-de-passe-postgres-long
@@ -41,6 +44,7 @@ CSE_NOTIFICATION_WEBHOOK=
 
 Le `docker-compose.yml` construit automatiquement `DATABASE_URL` pour connecter l'application au service PostgreSQL.
 Au premier demarrage, le serveur cree le schema PostgreSQL et insere le contenu par defaut si la base est vide.
+Le premier compte administrateur est cree uniquement si la table des admins est vide.
 
 ## Boite a idees
 
@@ -62,11 +66,16 @@ L'admin permet de:
 - valider ou rejeter les idees anonymes;
 - publier les idees validees pour permettre le vote des collaborateurs;
 - modifier les actualites;
-- publier des articles et informations CSE plus longs;
+- publier des articles et informations CSE plus longs avec mise en forme, liens et images;
 - gerer les brouillons et articles publies;
 - modifier l'agenda des reunions;
 - uploader des PV en PDF publics ou prives;
-- modifier les membres CSE avec nom, prenom, service, site, photo et role titulaire/suppleant.
+- modifier les membres CSE avec nom, prenom, service, site, photo et role titulaire/suppleant;
+- configurer un serveur SMTP et envoyer un email de test depuis l'interface;
+- creer, reactiver, desactiver et mettre a jour les mots de passe des comptes admin.
+
+Les sessions admin utilisent un cookie `HttpOnly`. Les mots de passe sont hashes en base avec `scrypt`.
+Garde `COOKIE_SECURE=true` en production derriere HTTPS.
 
 ## Pages publiques
 
