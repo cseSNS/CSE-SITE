@@ -10,7 +10,7 @@
     "check": "node --check server.js && node --check public/app.js && node --check public/admin.js && node --check public/lecteur.js"
   },
   "dependencies": {
-    "nodemailer": "^6.9.16",
+    "nodemailer": "^9.0.1",
     "pg": "^8.13.1",
     "quill": "^2.0.3",
     "sanitize-html": "^2.14.0"
