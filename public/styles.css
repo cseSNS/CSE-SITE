@@ -595,6 +595,169 @@ h1 {
   gap: 12px;
 }
 
+.page-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.page-controls label,
+.search-input {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.page-controls input,
+.page-controls select,
+.search-input input {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--white);
+  color: var(--ink);
+  padding: 10px 12px;
+}
+
+.document-controls label:first-child,
+.search-input {
+  flex: 1 1 320px;
+}
+
+.document-pinned {
+  margin-top: 4px;
+  color: var(--coral);
+  font-weight: 800;
+}
+
+.calendar-link,
+.member-contact,
+.featured-link {
+  width: fit-content;
+  color: var(--ink);
+  font-weight: 850;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.agenda-calendar {
+  margin-bottom: 28px;
+}
+
+.calendar-month {
+  margin: 0 0 12px;
+  font-family: "MuseoModerno", Inter, sans-serif;
+  font-size: 1.4rem;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  background: var(--white);
+}
+
+.calendar-day-label,
+.calendar-day {
+  min-height: 92px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 8px;
+}
+
+.calendar-day-label {
+  min-height: auto;
+  background: var(--pink-wash);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.calendar-day {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.calendar-event {
+  overflow: hidden;
+  border-left: 3px solid var(--pink-strong);
+  color: var(--ink);
+  font-size: 0.76rem;
+  font-weight: 800;
+  padding-left: 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.featured-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 18px;
+  padding-bottom: 92px;
+}
+
+.featured-list {
+  display: grid;
+  gap: 12px;
+}
+
+.featured-card,
+.next-meeting-card,
+.search-result {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.featured-card h2,
+.next-meeting-card h2 {
+  margin: 0;
+  font-size: clamp(1.3rem, 3vw, 2rem);
+  line-height: 1.1;
+}
+
+.next-meeting-card {
+  align-content: start;
+  background: var(--ink);
+  color: var(--white);
+}
+
+.next-meeting-card .eyebrow,
+.next-meeting-card .calendar-link {
+  color: var(--pink);
+}
+
+.search-section {
+  padding-bottom: 92px;
+}
+
+.search-results {
+  display: grid;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.search-result strong,
+.search-result span:last-child {
+  display: block;
+}
+
+.search-result span:last-child,
+.search-placeholder {
+  color: var(--muted);
+}
+
 .document-row {
   display: grid;
   grid-template-columns: 58px 1fr auto;
@@ -654,6 +817,45 @@ h1 {
   background: var(--white);
   padding: 24px;
   box-shadow: var(--shadow);
+}
+
+.idea-tracking-card {
+  display: grid;
+  gap: 12px;
+  border-top: 4px solid var(--pink-strong);
+  background: var(--ink);
+  color: var(--white);
+  padding: 24px;
+}
+
+.idea-tracking-card .eyebrow,
+.idea-tracking-card p {
+  color: var(--pink);
+}
+
+.idea-tracking-card h3,
+.idea-tracking-card p {
+  margin-bottom: 0;
+}
+
+.tracking-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.tracking-form input {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--white);
+  padding: 12px;
+}
+
+.tracking-form .button-secondary {
+  border-color: var(--white);
+  background: var(--white);
 }
 
 .idea-form label {
@@ -739,6 +941,18 @@ h1 {
   margin: 16px 0 12px;
   color: #314454;
   font-weight: 700;
+}
+
+.idea-lifecycle {
+  display: block;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.lifecycle-in_progress {
+  color: var(--coral);
 }
 
 .idea-public-card small {
@@ -978,6 +1192,10 @@ h1 {
     grid-template-columns: 1fr;
   }
 
+  .featured-layout {
+    grid-template-columns: 1fr;
+  }
+
   .quick-strip article + article {
     border-top: 1px solid var(--line);
     border-left: 0;
@@ -999,6 +1217,10 @@ h1 {
   .site-footer {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .tracking-form {
+    grid-template-columns: 1fr;
   }
 
   .pdf-viewer {
@@ -1047,5 +1269,19 @@ h1 {
   .pdf-viewer {
     height: 72vh;
     min-height: 440px;
+  }
+
+  .calendar-day-label,
+  .calendar-day {
+    min-height: 64px;
+    padding: 5px;
+  }
+
+  .calendar-day-label {
+    font-size: 0.66rem;
+  }
+
+  .calendar-event {
+    font-size: 0.65rem;
   }
 }

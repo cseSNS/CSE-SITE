@@ -7,6 +7,8 @@
     <title>Admin CSE</title>
     <link rel="stylesheet" href="/styles.css">
     <link rel="stylesheet" href="/admin.css">
+    <link rel="stylesheet" href="/vendor/quill.snow.css">
+    <script src="/vendor/quill.js"></script>
     <script src="/admin.js" defer></script>
   </head>
   <body class="admin-body">
@@ -17,11 +19,11 @@
       </a>
       <nav class="admin-tabs" aria-label="Sections admin" data-admin-nav hidden>
         <button type="button" data-tab-button="dashboard">Tableau de bord</button>
-        <button type="button" data-tab-button="ideas">Id&eacute;es</button>
-        <button type="button" data-tab-button="content">Agenda</button>
-        <button type="button" data-tab-button="posts">Articles</button>
-        <button type="button" data-tab-button="documents">PV</button>
-        <button type="button" data-tab-button="members">Membres</button>
+        <button type="button" data-tab-button="ideas" data-ideas-role>Id&eacute;es</button>
+        <button type="button" data-tab-button="content" data-content-role>Agenda</button>
+        <button type="button" data-tab-button="posts" data-content-role>Articles</button>
+        <button type="button" data-tab-button="documents" data-content-role>PV</button>
+        <button type="button" data-tab-button="members" data-content-role>Membres</button>
         <button type="button" data-tab-button="settings" data-owner-only>Param&egrave;tres</button>
       </nav>
       <div class="admin-header-actions">
@@ -73,6 +75,14 @@
             <span data-admin-documents>0</span>
             <p>Documents</p>
           </article>
+          <article data-content-role>
+            <span data-admin-drafts>0</span>
+            <p>Brouillons</p>
+          </article>
+          <article>
+            <span data-admin-next-meeting>-</span>
+            <p>Prochaine r&eacute;union</p>
+          </article>
         </div>
 
         <section class="admin-panel is-active" data-tab="dashboard">
@@ -83,17 +93,17 @@
             </div>
           </div>
           <div class="dashboard-grid">
-            <article class="admin-item" data-owner-only>
+            <article class="admin-item" data-ideas-role>
               <h3>A traiter en priorit&eacute;</h3>
               <p class="admin-item-meta">Les id&eacute;es en attente doivent &ecirc;tre relues avant publication et vote collaborateurs.</p>
               <button class="button button-primary" type="button" data-shortcut-tab="ideas">Ouvrir les id&eacute;es</button>
             </article>
-            <article class="admin-item">
+            <article class="admin-item" data-content-role>
               <h3>Publier une information</h3>
               <p class="admin-item-meta">Cr&eacute;e un article complet avec liens, images, mise en forme et statut brouillon.</p>
               <button class="button button-secondary" type="button" data-shortcut-tab="posts">Nouvel article</button>
             </article>
-            <article class="admin-item">
+            <article class="admin-item" data-owner-only>
               <h3>Communication email</h3>
               <p class="admin-item-meta">Configure le serveur SMTP et envoie un email de test depuis l'administration.</p>
               <button class="button button-secondary" type="button" data-shortcut-tab="settings">Configurer SMTP</button>
@@ -101,7 +111,7 @@
           </div>
         </section>
 
-        <section class="admin-panel" data-tab="ideas">
+        <section class="admin-panel" data-tab="ideas" data-ideas-role>
           <div class="admin-panel-heading">
             <div>
               <p class="eyebrow">Bo&icirc;te &agrave; id&eacute;es</p>
@@ -130,7 +140,7 @@
           <div class="admin-list" data-admin-ideas></div>
         </section>
 
-        <section class="admin-panel" data-tab="content">
+        <section class="admin-panel" data-tab="content" data-content-role>
           <div class="admin-panel-heading">
             <div>
               <p class="eyebrow">Site public</p>
@@ -153,20 +163,24 @@
           <p class="form-status" data-content-status role="status"></p>
         </section>
 
-        <section class="admin-panel" data-tab="posts">
+        <section class="admin-panel" data-tab="posts" data-content-role>
           <div class="admin-panel-heading">
             <div>
               <p class="eyebrow">Articles</p>
               <h2>Infos CSE</h2>
             </div>
-            <button class="button button-primary" type="button" data-save-posts>Sauvegarder</button>
+            <div class="admin-actions"><button class="button button-secondary" type="button" data-preview-post>Previsualiser</button><button class="button button-primary" type="button" data-save-posts>Sauvegarder</button></div>
           </div>
+          <article class="article-preview" data-post-preview hidden>
+            <div class="admin-item-header"><h3 data-post-preview-title>Apercu</h3><button class="viewer-close" type="button" data-close-post-preview aria-label="Fermer l'apercu" title="Fermer l'apercu">&times;</button></div>
+            <div class="post-body" data-post-preview-body></div>
+          </article>
           <div class="admin-list" data-posts-editor></div>
           <button class="button button-secondary" type="button" data-add-post>Ajouter une info</button>
           <p class="form-status" data-post-status role="status"></p>
         </section>
 
-        <section class="admin-panel" data-tab="documents">
+        <section class="admin-panel" data-tab="documents" data-content-role>
           <div class="admin-panel-heading">
             <div>
               <p class="eyebrow">Documents</p>
@@ -190,6 +204,24 @@
               </select>
             </label>
             <label>
+              Type de document
+              <select name="kind">
+                <option value="pv">Proces-verbal</option>
+                <option value="odj">Ordre du jour</option>
+                <option value="avantages">Avantages</option>
+                <option value="guide">Guide</option>
+                <option value="other">Autre</option>
+              </select>
+            </label>
+            <label>
+              Publication
+              <input name="publishedAt" type="date">
+            </label>
+            <label>
+              <input name="pinned" type="checkbox">
+              Epingler en tete de la bibliotheque
+            </label>
+            <label>
               Fichier PDF
               <input name="file" type="file" accept="application/pdf" required>
             </label>
@@ -199,7 +231,7 @@
           <div class="admin-list" data-documents-editor></div>
         </section>
 
-        <section class="admin-panel" data-tab="members">
+        <section class="admin-panel" data-tab="members" data-content-role>
           <div class="admin-panel-heading">
             <div>
               <p class="eyebrow">Equipe</p>
@@ -286,6 +318,7 @@
                 R&ocirc;le
                 <select name="role">
                   <option value="editor">Editeur du portail</option>
+                  <option value="moderator">Moderateur des idees</option>
                   <option value="owner">Propri&eacute;taire</option>
                 </select>
               </label>
@@ -295,6 +328,13 @@
               <p class="form-status" data-admin-account-status role="status"></p>
             </form>
             <div class="admin-list" data-admin-accounts></div>
+          </div>
+          <div class="settings-block">
+            <div class="admin-panel-heading compact-heading">
+              <div><p class="eyebrow">Traceabilite</p><h3>Historique d'administration</h3></div>
+              <button class="button button-secondary" type="button" data-refresh-audit>Rafra&icirc;chir</button>
+            </div>
+            <div class="admin-list" data-admin-audit></div>
           </div>
         </section>
       </section>

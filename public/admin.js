@@ -10,6 +10,8 @@ const approvedStat = document.querySelector("[data-admin-approved]");
 const progressStat = document.querySelector("[data-admin-progress]");
 const treatedStat = document.querySelector("[data-admin-treated]");
 const documentsStat = document.querySelector("[data-admin-documents]");
+const draftsStat = document.querySelector("[data-admin-drafts]");
+const nextMeetingStat = document.querySelector("[data-admin-next-meeting]");
 const ideasContainer = document.querySelector("[data-admin-ideas]");
 const ideaSearch = document.querySelector("[data-idea-search]");
 const ideaFilter = document.querySelector("[data-idea-filter]");
@@ -29,12 +31,18 @@ const mailForm = document.querySelector("[data-mail-form]");
 const adminAccountForm = document.querySelector("[data-admin-account-form]");
 const adminAccountsContainer = document.querySelector("[data-admin-accounts]");
 const adminAccountStatus = document.querySelector("[data-admin-account-status]");
+const adminAuditContainer = document.querySelector("[data-admin-audit]");
 const logoutButton = document.querySelector("[data-logout]");
+const postPreview = document.querySelector("[data-post-preview]");
+const postPreviewTitle = document.querySelector("[data-post-preview-title]");
+const postPreviewBody = document.querySelector("[data-post-preview-body]");
 
 let content = { news: [], posts: [], meetings: [], documents: [], members: [] };
 let ideas = [];
 let adminAccounts = [];
 let currentAdmin = null;
+let isDirty = false;
+const richEditors = new WeakMap();
 
 function setMessage(element, message, state = "") {
   if (!element) return;
@@ -45,8 +53,16 @@ function setMessage(element, message, state = "") {
 function applyPermissions(admin) {
   currentAdmin = admin;
   const isOwner = admin?.role === "owner";
+  const isEditor = admin?.role === "editor";
+  const isModerator = admin?.role === "moderator";
   document.querySelectorAll("[data-owner-only]").forEach((element) => {
     element.hidden = !isOwner;
+  });
+  document.querySelectorAll("[data-content-role]").forEach((element) => {
+    element.hidden = isModerator;
+  });
+  document.querySelectorAll("[data-ideas-role]").forEach((element) => {
+    element.hidden = isEditor;
   });
 }
 
@@ -103,50 +119,22 @@ function field(label, value = "", options = {}) {
 function richField(label, value = "", key = "body") {
   const wrapper = createElement("div", "admin-field rich-field");
   const title = createElement("span", "", label);
-  const toolbar = createElement("div", "rich-toolbar");
-  [
-    ["bold", "B"],
-    ["italic", "I"],
-    ["underline", "U"],
-    ["insertUnorderedList", "Liste"],
-    ["formatBlock", "Titre"],
-    ["createLink", "Lien"],
-    ["insertImage", "Image"]
-  ].forEach(([command, text]) => {
-    const button = createElement("button", "button button-secondary", text);
-    button.type = "button";
-    button.dataset.command = command;
-    toolbar.append(button);
-  });
-
   const editor = createElement("div", "rich-editor");
-  editor.contentEditable = "true";
   editor.dataset.key = key;
-  editor.innerHTML = value || "";
-
-  toolbar.addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-command]");
-    if (!button) return;
-    editor.focus();
-    const command = button.dataset.command;
-    if (command === "createLink") {
-      const url = prompt("Adresse du lien");
-      if (url) document.execCommand(command, false, url);
-      return;
-    }
-    if (command === "insertImage") {
-      const url = prompt("Adresse de l'image");
-      if (url) document.execCommand(command, false, url);
-      return;
-    }
-    if (command === "formatBlock") {
-      document.execCommand(command, false, "h3");
-      return;
-    }
-    document.execCommand(command, false, null);
-  });
-
-  wrapper.append(title, toolbar, editor);
+  if (window.Quill) {
+    const quill = new window.Quill(editor, {
+      theme: "snow",
+      modules: {
+        toolbar: [["bold", "italic", "underline"], [{ header: [2, 3, false] }], [{ list: "ordered" }, { list: "bullet" }], ["link", "image"], ["clean"]]
+      }
+    });
+    quill.root.innerHTML = value || "";
+    richEditors.set(editor, quill);
+  } else {
+    editor.contentEditable = "true";
+    editor.innerHTML = value || "";
+  }
+  wrapper.append(title, editor);
   return wrapper;
 }
 
@@ -156,7 +144,36 @@ function getInput(card, key) {
 
 function getRichInput(card, key) {
   const editor = card.querySelector(`.rich-editor[data-key="${key}"]`);
-  return editor ? editor.innerHTML.trim() : getInput(card, key);
+  const quill = editor ? richEditors.get(editor) : null;
+  return quill ? quill.root.innerHTML.trim() : editor ? editor.innerHTML.trim() : getInput(card, key);
+}
+
+function renderPreviewHtml(container, value) {
+  const template = document.createElement("template");
+  template.innerHTML = String(value || "");
+  const allowedTags = new Set(["P", "BR", "STRONG", "B", "EM", "I", "U", "A", "UL", "OL", "LI", "H2", "H3", "BLOCKQUOTE", "IMG"]);
+  template.content.querySelectorAll("*").forEach((node) => {
+    if (!allowedTags.has(node.tagName)) {
+      node.replaceWith(document.createTextNode(node.textContent || ""));
+      return;
+    }
+    [...node.attributes].forEach((attribute) => {
+      if (!["href", "src", "alt"].includes(attribute.name)) node.removeAttribute(attribute.name);
+    });
+  });
+  container.replaceChildren(template.content.cloneNode(true));
+}
+
+function previewPostCard(card) {
+  if (!card || !postPreview) return;
+  postPreviewTitle.textContent = getInput(card, "title") || "Apercu de l'article";
+  renderPreviewHtml(postPreviewBody, getRichInput(card, "body"));
+  postPreview.hidden = false;
+  postPreview.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function previewFirstPost() {
+  previewPostCard(postsEditor?.querySelector(".editor-card"));
 }
 
 function activateTab(name) {
@@ -264,12 +281,18 @@ function editorCard(type, item) {
   }
 
   if (type === "post") {
+    const preview = createElement("button", "button button-secondary", "Apercu");
+    preview.type = "button";
+    preview.addEventListener("click", () => previewPostCard(card));
+    actions.append(preview);
     card.append(
       field("Titre", item.title, { key: "title" }),
       field("Categorie", item.category, { key: "category", placeholder: "Comprendre, Avantages, Dossier..." }),
       field("Statut", item.status || "published", { key: "status", type: "select", choices: ["published", "draft"] }),
       field("Mise en avant", item.featured ? "yes" : "no", { key: "featured", type: "select", choices: ["no", "yes"] }),
       field("Date", item.date, { key: "date", type: "date" }),
+      field("Publication programmee", item.scheduledFor, { key: "scheduledFor", type: "date" }),
+      field("Date d'expiration", item.expiresAt, { key: "expiresAt", type: "date" }),
       field("Resume", item.excerpt, { key: "excerpt", type: "textarea", rows: 3 }),
       richField("Contenu", item.body, "body"),
       actions
@@ -282,6 +305,7 @@ function editorCard(type, item) {
       field("Libelle date", item.dateLabel, { key: "dateLabel", placeholder: "27 juin" }),
       field("Date technique", item.datetime, { key: "datetime", type: "date" }),
       field("Lieu", item.place, { key: "place" }),
+      field("Site", item.site, { key: "site" }),
       field("Heure", item.time, { key: "time", placeholder: "10h30" }),
       field("Description", item.body, { key: "body", type: "textarea" }),
       actions
@@ -384,6 +408,8 @@ function gatherPosts() {
     status: getInput(card, "status") || "published",
     featured: getInput(card, "featured") === "yes",
     date: getInput(card, "date"),
+    scheduledFor: getInput(card, "scheduledFor"),
+    expiresAt: getInput(card, "expiresAt"),
     excerpt: getInput(card, "excerpt"),
     body: getRichInput(card, "body")
   })).filter((item) => item.title && item.body);
@@ -396,6 +422,7 @@ function gatherMeetings() {
     dateLabel: getInput(card, "dateLabel"),
     datetime: getInput(card, "datetime"),
     place: getInput(card, "place"),
+    site: getInput(card, "site"),
     time: getInput(card, "time"),
     body: getInput(card, "body")
   })).filter((item) => item.title);
@@ -430,6 +457,7 @@ async function saveContent(statusElement) {
   const payload = await response.json();
   content = payload.content;
   renderContentEditors();
+  isDirty = false;
   setMessage(statusElement, "Modifications sauvegardees.", "success");
   await loadStats();
 }
@@ -474,6 +502,9 @@ async function uploadDocument(event) {
       title: formData.get("title"),
       description: formData.get("description"),
       visibility: formData.get("visibility"),
+      kind: formData.get("kind"),
+      publishedAt: formData.get("publishedAt"),
+      pinned: formData.get("pinned") === "on",
       fileName: file.name,
       dataBase64: await readFileAsBase64(file)
     })
@@ -488,12 +519,13 @@ async function uploadDocument(event) {
   content = payload.content;
   documentForm.reset();
   renderContentEditors();
+  isDirty = false;
   setMessage(documentStatus, "PDF ajoute au site.", "success");
   await loadStats();
 }
 
 async function loadStats() {
-  const response = await fetch("/api/stats", { headers: { Accept: "application/json" } });
+  const response = await request("/api/admin/dashboard");
   if (!response.ok) return;
   const payload = await response.json();
   pendingStat.textContent = String(payload.pendingIdeas || 0);
@@ -501,6 +533,8 @@ async function loadStats() {
   progressStat.textContent = String(payload.inProgressIdeas || 0);
   treatedStat.textContent = String(payload.treatedIdeas || 0);
   documentsStat.textContent = String(payload.totalDocuments || payload.documents || 0);
+  if (draftsStat) draftsStat.textContent = String(payload.draftPosts || 0);
+  if (nextMeetingStat) nextMeetingStat.textContent = payload.nextMeeting?.dateLabel || payload.nextMeeting?.datetime || "-";
 }
 
 async function downloadIdeasCsv(event) {
@@ -609,10 +643,20 @@ function renderAdminAccounts() {
     const header = createElement("div", "admin-item-header");
     const copy = createElement("div");
     copy.append(createElement("h3", "", admin.displayName || admin.email));
-    const role = admin.role === "owner" ? "Proprietaire" : "Editeur";
+    const role = admin.role === "owner" ? "Proprietaire" : admin.role === "moderator" ? "Moderateur idees" : "Editeur";
     copy.append(createElement("p", "admin-item-meta", `${admin.email} - ${role} - ${admin.active ? "Actif" : "Desactive"} - ${admin.lastLoginAt ? new Date(admin.lastLoginAt).toLocaleString("fr-FR") : "Jamais connecte"}`));
     header.append(copy);
     const actions = createElement("div", "admin-actions");
+    const roleSelect = document.createElement("select");
+    roleSelect.className = "admin-role-select";
+    [["owner", "Proprietaire"], ["editor", "Editeur"], ["moderator", "Moderateur"]].forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      roleSelect.append(option);
+    });
+    roleSelect.value = admin.role;
+    roleSelect.addEventListener("change", () => updateAdminAccount(admin.id, { displayName: admin.displayName, active: admin.active, role: roleSelect.value }));
     const toggle = createElement("button", admin.active ? "button button-danger" : "button button-success", admin.active ? "Desactiver" : "Reactiver");
     toggle.type = "button";
     toggle.addEventListener("click", () => updateAdminAccount(admin.id, { displayName: admin.displayName, active: !admin.active }));
@@ -622,7 +666,7 @@ function renderAdminAccounts() {
       const nextPassword = prompt("Nouveau mot de passe admin (12 caracteres minimum)");
       if (nextPassword) updateAdminAccount(admin.id, { displayName: admin.displayName, active: admin.active, password: nextPassword });
     });
-    actions.append(toggle, password);
+    actions.append(roleSelect, toggle, password);
     header.append(actions);
     card.append(header);
     return card;
@@ -635,6 +679,19 @@ async function loadAdminAccounts() {
   const payload = await response.json();
   adminAccounts = payload.admins || [];
   renderAdminAccounts();
+}
+
+async function loadAudit() {
+  if (!adminAuditContainer) return;
+  const response = await request("/api/admin/audit");
+  if (!response.ok) return;
+  const payload = await response.json();
+  adminAuditContainer.replaceChildren(...(payload.entries || []).map((entry) => {
+    const item = createElement("article", "admin-item");
+    item.append(createElement("h3", "", entry.action.replaceAll(".", " ")));
+    item.append(createElement("p", "admin-item-meta", `${entry.actor} - ${new Date(entry.createdAt).toLocaleString("fr-FR")}`));
+    return item;
+  }));
 }
 
 async function createAdminAccount(event) {
@@ -681,8 +738,10 @@ async function bootAdmin() {
   applyPermissions(payload.admin);
   showAdmin();
   activateTab("dashboard");
-  const loaders = [loadContent(), loadIdeas(), loadStats()];
-  if (payload.admin.role === "owner") loaders.push(loadMailSettings(), loadAdminAccounts());
+  const loaders = [loadStats()];
+  if (payload.admin.role !== "moderator") loaders.push(loadContent());
+  if (payload.admin.role !== "editor") loaders.push(loadIdeas());
+  if (payload.admin.role === "owner") loaders.push(loadMailSettings(), loadAdminAccounts(), loadAudit());
   await Promise.all(loaders);
 }
 
@@ -714,15 +773,32 @@ document.querySelector("[data-add-meeting]")?.addEventListener("click", () => me
 document.querySelector("[data-add-member]")?.addEventListener("click", () => membersEditor.prepend(editorCard("member", { id: uid("member"), role: "Titulaire" })));
 document.querySelector("[data-save-content]")?.addEventListener("click", () => saveContent(contentStatus));
 document.querySelector("[data-save-posts]")?.addEventListener("click", () => saveContent(postStatus));
+document.querySelector("[data-preview-post]")?.addEventListener("click", previewFirstPost);
+document.querySelector("[data-close-post-preview]")?.addEventListener("click", () => {
+  if (postPreview) postPreview.hidden = true;
+});
 document.querySelector("[data-save-members]")?.addEventListener("click", () => saveContent(memberStatus));
 document.querySelector("[data-save-mail]")?.addEventListener("click", saveMailSettings);
 document.querySelector("[data-test-mail]")?.addEventListener("click", testMail);
 document.querySelector("[data-refresh-admins]")?.addEventListener("click", loadAdminAccounts);
+document.querySelector("[data-refresh-audit]")?.addEventListener("click", loadAudit);
 documentForm?.addEventListener("submit", uploadDocument);
 adminAccountForm?.addEventListener("submit", createAdminAccount);
 logoutButton?.addEventListener("click", async () => {
   await request("/api/admin/logout", { method: "POST" });
   showLogin();
+});
+
+document.addEventListener("input", (event) => {
+  if (!adminApp?.hidden && event.target instanceof HTMLElement && event.target.closest(".admin-app")) isDirty = true;
+});
+document.addEventListener("change", (event) => {
+  if (!adminApp?.hidden && event.target instanceof HTMLElement && event.target.closest(".admin-app")) isDirty = true;
+});
+window.addEventListener("beforeunload", (event) => {
+  if (!isDirty) return;
+  event.preventDefault();
+  event.returnValue = "";
 });
 
 bootAdmin().catch(showLogin);

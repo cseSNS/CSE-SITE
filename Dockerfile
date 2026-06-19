@@ -6,6 +6,9 @@ WORKDIR /app
 COPY package.json server.js ./
 RUN npm install --omit=dev
 COPY public ./public
+RUN mkdir -p /app/public/vendor \
+  && cp /app/node_modules/quill/dist/quill.js /app/public/vendor/quill.js \
+  && cp /app/node_modules/quill/dist/quill.snow.css /app/public/vendor/quill.snow.css
 
 RUN mkdir -p /data && chown -R node:node /app /data
 

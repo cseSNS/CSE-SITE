@@ -13,12 +13,14 @@
       <a class="brand" href="/" aria-label="Accueil CSE"><span class="brand-mark">CSE</span><span class="brand-copy">Espace collaborateurs</span></a>
       <button class="nav-toggle" type="button" aria-label="Ouvrir le menu" aria-expanded="false" data-nav-toggle><span></span><span></span></button>
       <nav class="main-nav" data-nav>
+        <a href="/une.html">A la une</a>
         <a href="/actualites.html">Actualit&eacute;s</a>
         <a href="/infos.html">Infos CSE</a>
         <a href="/agenda.html">Agenda</a>
         <a href="/documents.html">PV &amp; documents</a>
         <a href="/idees.html">Id&eacute;es</a>
         <a href="/membres.html">Membres</a>
+        <a href="/recherche.html">Recherche</a>
       </nav>
     </header>
     <main>
@@ -29,6 +31,10 @@
         <a class="member-login-link" href="/connexion-cse">Se connecter</a>
       </section>
       <section class="section team-section">
+        <div class="page-controls member-controls">
+          <label>Site <select data-member-site-filter><option value="all">Tous les sites</option></select></label>
+          <label>Service <select data-member-service-filter><option value="all">Tous les services</option></select></label>
+        </div>
         <div class="team-grid" data-member-list></div>
       </section>
     </main>

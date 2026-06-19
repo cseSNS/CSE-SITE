@@ -38,6 +38,7 @@ ADMIN_BOOTSTRAP_NAME=Administrateur CSE
 ADMIN_SESSION_MAX_AGE_SECONDS=14400
 COOKIE_SECURE=true
 MAIL_SETTINGS_ENCRYPTION_KEY=64-caracteres-hexadecimaux-aleatoires
+VOTE_COOKIE_SECRET=secret-aleatoire-long-d-au-moins-32-caracteres
 POSTGRES_DB=cse
 POSTGRES_USER=cse
 POSTGRES_PASSWORD=un-mot-de-passe-postgres-long
@@ -47,6 +48,14 @@ CSE_NOTIFICATION_WEBHOOK=
 Le `docker-compose.yml` construit automatiquement `DATABASE_URL` pour connecter l'application au service PostgreSQL.
 Au premier demarrage, le serveur cree le schema PostgreSQL et insere le contenu par defaut si la base est vide.
 Le premier compte administrateur est cree uniquement si la table des admins est vide.
+
+Genere `VOTE_COOKIE_SECRET` avec une valeur aleatoire longue, par exemple:
+
+```bash
+openssl rand -base64 48
+```
+
+Ce secret signe le cookie anonyme qui limite les votes a un vote par idee et par navigateur, sans enregistrer l'identite d'un collaborateur.
 
 ## Boite a idees
 
@@ -58,6 +67,8 @@ Le premier compte administrateur est cree uniquement si la table des admins est 
 - Workflow: attente, validation, rejet
 - Statuts admin: attente, publiee, en cours, traitee, rejetee
 - Vote: les idees validees sont publiees sur le site et peuvent recevoir des votes
+- Chaque proposition fournit un code de suivi anonyme, utilisable sur la page Idees
+- Vote anonyme: cookie signe cote serveur et contrainte PostgreSQL d'un vote par idee et par navigateur
 - Protection simple: limitation en memoire a 5 actions toutes les 10 minutes par source
 - Export CSV disponible depuis l'admin
 
@@ -75,13 +86,16 @@ L'admin permet de:
 - modifier les membres CSE avec nom, prenom, service, site, photo et role titulaire/suppleant;
 - configurer un serveur SMTP et envoyer un email de test depuis l'interface;
 - creer, reactiver, desactiver et mettre a jour les mots de passe des comptes admin.
+- attribuer les roles Proprietaire, Editeur du portail ou Moderateur des idees;
+- consulter l'historique des actions administratives;
+- programmer la publication ou l'expiration d'un article et le previsualiser.
 
 Les sessions admin utilisent un cookie `HttpOnly`. Les mots de passe sont hashes en base avec `scrypt`.
 Garde `COOKIE_SECURE=true` en production derriere HTTPS.
 
 ## Securite
 
-- Les comptes disposent d'un role: `owner` (comptes, SMTP et configuration) ou `editor` (contenu, documents, idees).
+- Les comptes disposent d'un role: `owner` (comptes, SMTP et configuration), `editor` (contenu et documents) ou `moderator` (idees).
 - Les sessions sont stockees en base sous forme de hash, expirent par defaut apres 4 heures et utilisent en HTTPS un cookie `__Host-` avec `HttpOnly`, `Secure`, `SameSite=Strict` et `Priority=High`.
 - Les actions sensibles controlent l'origine de la requete, attendent du JSON et sont limitees en debit. La connexion est limitee a 5 essais par compte et par quart d'heure.
 - Les articles riches sont assainis avant stockage. Les liens et images ne peuvent utiliser que des URL `https`, des liens `mailto` ou des images `data` valides.
@@ -148,13 +162,45 @@ sh scripts/backup-postgres.sh
 
 Conserve les deux sauvegardes: PostgreSQL contient les contenus et idees, `/data` contient les fichiers uploades.
 
+Verifie regulierement qu'une sauvegarde PostgreSQL est restaurable dans un conteneur isole:
+
+```bash
+sh scripts/verify-postgres-backup.sh backups/cse-postgres-YYYYMMDD-HHMMSS.sql.gz
+```
+
+## Deploiement image GitHub
+
+GitHub Actions execute les controles puis publie l'image dans GitHub Container Registry apres chaque push sur `main`.
+Le VPS ne compile plus l'application: il telecharge l'image validee `ghcr.io/csesns/cse-site:latest`.
+
+Rends le package GHCR public dans les parametres du package GitHub, ou connecte Docker au registre avec un token ayant le droit `read:packages`. Ensuite, sur le VPS:
+
+```bash
+docker compose pull cse-site
+docker compose up -d
+```
+
+Pour figer une version precise, renseigne `CSE_SITE_IMAGE=ghcr.io/csesns/cse-site:<sha-github>` dans `.env` avant le redeploiement.
+
+## Supervision Uptime Kuma
+
+Le stack se trouve dans `deploy/uptime-kuma/`:
+
+```bash
+cd /home/workspace/cse-site/cse-site/deploy/uptime-kuma
+docker compose up -d
+```
+
+Ajoute ensuite dans Uptime Kuma un moniteur HTTPS vers `https://portail.cse-sns-security.fr/healthz`, avec verification du certificat TLS et une alerte email ou webhook.
+
 ## Mise a jour VPS
 
 Depuis le dossier du repo sur le VPS:
 
 ```bash
 git pull
-docker compose up -d --build
+docker compose pull cse-site
+docker compose up -d
 ```
 
 Avant une mise a jour importante, fais une sauvegarde:

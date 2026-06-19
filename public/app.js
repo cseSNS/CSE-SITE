@@ -16,6 +16,20 @@ const nextMeetingMeta = document.querySelector("[data-next-meeting-meta]");
 const publicDocumentViewer = document.querySelector("[data-public-document-viewer]");
 const publicDocumentTitle = document.querySelector("[data-public-document-title]");
 const publicPdfFrame = document.querySelector("[data-public-pdf-frame]");
+const ideaTrackingForm = document.querySelector("[data-idea-tracking-form]");
+const ideaTrackingStatus = document.querySelector("[data-idea-tracking-status]");
+const meetingSiteFilter = document.querySelector("[data-meeting-site-filter]");
+const agendaCalendar = document.querySelector("[data-agenda-calendar]");
+const documentSearch = document.querySelector("[data-document-search]");
+const documentKindFilter = document.querySelector("[data-document-kind-filter]");
+const memberSiteFilter = document.querySelector("[data-member-site-filter]");
+const memberServiceFilter = document.querySelector("[data-member-service-filter]");
+const featuredList = document.querySelector("[data-featured-list]");
+const featuredMeeting = document.querySelector("[data-featured-meeting]");
+const globalSearchInput = document.querySelector("[data-global-search-input]");
+const globalSearchResults = document.querySelector("[data-global-search-results]");
+
+let publicContent = { news: [], posts: [], meetings: [], documents: [], members: [] };
 
 navToggle?.addEventListener("click", () => {
   const isOpen = nav?.classList.toggle("is-open") ?? false;
@@ -65,6 +79,25 @@ function createElement(tag, className, text) {
   if (className) element.className = className;
   if (text !== undefined) element.textContent = text;
   return element;
+}
+
+function fillSelect(select, values) {
+  if (!select) return;
+  const current = select.value || "all";
+  [...select.querySelectorAll("option:not([value='all'])")].forEach((option) => option.remove());
+  [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, "fr")).forEach((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    select.append(option);
+  });
+  select.value = [...select.options].some((option) => option.value === current) ? current : "all";
+}
+
+function calendarLink(meeting) {
+  const link = createElement("a", "calendar-link", "Ajouter au calendrier");
+  link.href = `/api/meetings/${encodeURIComponent(meeting.id)}.ics`;
+  return link;
 }
 
 function isSafeContentUrl(value, allowedProtocols) {
@@ -177,30 +210,71 @@ function renderPosts(items) {
 
 function renderMeetings(items) {
   if (!meetingList) return;
+  fillSelect(meetingSiteFilter, items.map((item) => item.site));
+  const selectedSite = meetingSiteFilter?.value || "all";
+  const visibleMeetings = items.filter((item) => selectedSite === "all" || item.site === selectedSite);
   meetingList.replaceChildren();
-  items.slice(0, getLimit(meetingList, items.length)).forEach((item) => {
+  visibleMeetings.slice(0, getLimit(meetingList, visibleMeetings.length)).forEach((item) => {
     const article = createElement("article");
     const time = createElement("time", "", item.dateLabel || formatDate(item.datetime));
     if (item.datetime) time.dateTime = item.datetime;
     const body = createElement("div");
     body.append(createElement("h3", "", item.title));
-    const details = [item.place, item.time].filter(Boolean).join(" · ");
+    const details = [item.place, item.site, item.time].filter(Boolean).join(" · ");
     body.append(createElement("p", "", details ? `${item.body} ${details}` : item.body));
+    if (item.datetime) body.append(calendarLink(item));
     article.append(time, body);
     meetingList.append(article);
   });
 
-  const next = items[0];
+  renderAgendaCalendar(visibleMeetings);
+  const next = visibleMeetings[0];
   if (next && nextMeetingTitle && nextMeetingMeta) {
     nextMeetingTitle.textContent = next.dateLabel || formatDate(next.datetime);
-    nextMeetingMeta.textContent = [next.place, next.time].filter(Boolean).join(" · ") || next.title;
+    nextMeetingMeta.textContent = [next.place, next.site, next.time].filter(Boolean).join(" · ") || next.title;
   }
+}
+
+function renderAgendaCalendar(items) {
+  if (!agendaCalendar) return;
+  agendaCalendar.replaceChildren();
+  const dated = items.filter((item) => item.datetime).sort((a, b) => String(a.datetime).localeCompare(String(b.datetime)));
+  if (!dated.length) return;
+  const reference = new Date(`${dated[0].datetime}T12:00:00`);
+  const year = reference.getFullYear();
+  const month = reference.getMonth();
+  const firstDay = new Date(year, month, 1).getDay() || 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const heading = createElement("h2", "calendar-month", new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric" }).format(reference));
+  const grid = createElement("div", "calendar-grid");
+  ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].forEach((day) => grid.append(createElement("span", "calendar-day-label", day)));
+  for (let index = 1; index < firstDay; index += 1) grid.append(createElement("span", "calendar-day calendar-day-empty", ""));
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const cell = createElement("div", "calendar-day");
+    cell.append(createElement("strong", "", String(day)));
+    dated.filter((item) => {
+      const date = new Date(`${item.datetime}T12:00:00`);
+      return date.getDate() === day && date.getMonth() === month;
+    }).forEach((item) => {
+      const link = createElement("a", "calendar-event", item.title);
+      link.href = `/api/meetings/${encodeURIComponent(item.id)}.ics`;
+      cell.append(link);
+    });
+    grid.append(cell);
+  }
+  agendaCalendar.append(heading, grid);
 }
 
 function renderDocuments(items) {
   if (!documentList) return;
+  const query = (documentSearch?.value || "").trim().toLowerCase();
+  const kind = documentKindFilter?.value || "all";
+  const visibleDocuments = items.filter((item) => {
+    const matchesQuery = !query || `${item.title} ${item.description} ${item.kind}`.toLowerCase().includes(query);
+    return matchesQuery && (kind === "all" || item.kind === kind);
+  });
   documentList.replaceChildren();
-  items.slice(0, getLimit(documentList, items.length)).forEach((item) => {
+  visibleDocuments.slice(0, getLimit(documentList, visibleDocuments.length)).forEach((item) => {
     const link = createElement("a", "document-row");
     const viewerParams = new URLSearchParams({ document: item.url, title: item.title || "Document CSE" });
     link.href = `/lecteur.html?${viewerParams.toString()}`;
@@ -216,7 +290,9 @@ function renderDocuments(items) {
     link.append(createElement("span", "doc-icon", "PDF"));
     const copy = createElement("span");
     copy.append(createElement("strong", "", item.title));
-    copy.append(createElement("small", "", item.description || "Document CSE"));
+    const metadata = [item.description || "Document CSE", item.publishedAt ? formatDate(item.publishedAt) : ""].filter(Boolean).join(" · ");
+    copy.append(createElement("small", "", metadata));
+    if (item.pinned) copy.append(createElement("small", "document-pinned", "Document epingle"));
     link.append(copy, createElement("span", "download", "Consulter"));
     documentList.append(link);
   });
@@ -234,8 +310,13 @@ function initials(member) {
 
 function renderMembers(items) {
   if (!memberList) return;
+  fillSelect(memberSiteFilter, items.map((member) => member.site));
+  fillSelect(memberServiceFilter, items.map((member) => member.service));
+  const selectedSite = memberSiteFilter?.value || "all";
+  const selectedService = memberServiceFilter?.value || "all";
+  const visibleMembers = items.filter((member) => (selectedSite === "all" || member.site === selectedSite) && (selectedService === "all" || member.service === selectedService));
   memberList.replaceChildren();
-  items.slice(0, getLimit(memberList, items.length)).forEach((member) => {
+  visibleMembers.slice(0, getLimit(memberList, visibleMembers.length)).forEach((member) => {
     const card = createElement("article", "team-card member-card reveal");
     const photo = createElement("div", "member-photo");
     if (member.photo) {
@@ -251,7 +332,7 @@ function renderMembers(items) {
     card.append(createElement("h3", "", `${member.firstName} ${member.lastName}`.trim()));
     card.append(createElement("p", "", [member.service, member.site].filter(Boolean).join(" · ")));
     if (member.email) {
-      const mail = createElement("a", "", member.email);
+      const mail = createElement("a", "member-contact", "Contacter");
       mail.href = `mailto:${member.email}`;
       card.append(mail);
     }
@@ -260,29 +341,17 @@ function renderMembers(items) {
   observeReveals(memberList);
 }
 
-function hasVoted(ideaId) {
-  try {
-    return localStorage.getItem(`cse-vote-${ideaId}`) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function markVoted(ideaId) {
-  try {
-    localStorage.setItem(`cse-vote-${ideaId}`, "1");
-  } catch {
-    // Voting still works server-side if local storage is unavailable.
-  }
-}
-
 async function voteForIdea(ideaId, button) {
-  if (hasVoted(ideaId)) return;
+  if (button.dataset.voted === "true") return;
   button.disabled = true;
   try {
     const response = await fetch(`/api/ideas/${ideaId}/vote`, { method: "POST", headers: { Accept: "application/json" } });
+    if (response.status === 409) {
+      button.dataset.voted = "true";
+      button.textContent = "Vote enregistre";
+      return;
+    }
     if (!response.ok) throw new Error("vote_failed");
-    markVoted(ideaId);
     await renderApprovedIdeas();
   } catch {
     button.disabled = false;
@@ -308,13 +377,15 @@ async function renderApprovedIdeas() {
     payload.ideas.slice(0, getLimit(approvedIdeasList, payload.ideas.length)).forEach((idea) => {
       const card = createElement("article", "idea-public-card");
       card.append(createElement("span", "tag tag-teal", idea.category));
+      card.append(createElement("span", `idea-lifecycle lifecycle-${idea.status}`, idea.status === "in_progress" ? "En cours d'etude" : "Retenue par le CSE"));
       card.append(createElement("p", "idea-public-message", idea.message));
       if (idea.context) card.append(createElement("small", "", idea.context));
       const footer = createElement("div", "idea-public-footer");
       footer.append(createElement("strong", "", `${idea.votes} vote${idea.votes > 1 ? "s" : ""}`));
-      const button = createElement("button", "button button-secondary", hasVoted(idea.id) ? "Vote enregistré" : "Voter");
+      const button = createElement("button", "button button-secondary", idea.voted ? "Vote enregistre" : "Voter");
       button.type = "button";
-      button.disabled = hasVoted(idea.id);
+      button.dataset.voted = String(Boolean(idea.voted));
+      button.disabled = Boolean(idea.voted);
       button.addEventListener("click", () => voteForIdea(idea.id, button));
       footer.append(button);
       card.append(footer);
@@ -325,17 +396,78 @@ async function renderApprovedIdeas() {
   }
 }
 
+function renderFeatured(content) {
+  if (!featuredList || !featuredMeeting) return;
+  featuredList.replaceChildren();
+  const items = [
+    ...content.posts.map((item) => ({ ...item, type: "Article", href: "/infos.html", summary: item.excerpt })),
+    ...content.news.map((item) => ({ ...item, type: "Actualite", href: "/actualites.html", summary: item.body }))
+  ].sort((a, b) => Number(Boolean(b.featured)) - Number(Boolean(a.featured)) || String(b.date).localeCompare(String(a.date))).slice(0, 3);
+  items.forEach((item) => {
+    const card = createElement("article", "featured-card");
+    card.append(createElement("span", "tag tag-teal", item.type));
+    card.append(createElement("h2", "", item.title));
+    card.append(createElement("p", "", item.summary || "Information CSE"));
+    const link = createElement("a", "featured-link", "Lire l'information");
+    link.href = item.href;
+    card.append(link);
+    featuredList.append(card);
+  });
+
+  const meeting = [...content.meetings].sort((a, b) => String(a.datetime).localeCompare(String(b.datetime)))[0];
+  featuredMeeting.replaceChildren();
+  featuredMeeting.append(createElement("p", "eyebrow", "Prochaine reunion"));
+  if (!meeting) {
+    featuredMeeting.append(createElement("h2", "", "Aucun rendez-vous programme"));
+    return;
+  }
+  featuredMeeting.append(createElement("h2", "", meeting.title));
+  featuredMeeting.append(createElement("p", "", [formatDate(meeting.datetime), meeting.place, meeting.site, meeting.time].filter(Boolean).join(" · ")));
+  if (meeting.datetime) featuredMeeting.append(calendarLink(meeting));
+}
+
+function renderGlobalSearch(content) {
+  if (!globalSearchResults) return;
+  const query = (globalSearchInput?.value || "").trim().toLowerCase();
+  globalSearchResults.replaceChildren();
+  if (query.length < 2) {
+    globalSearchResults.append(createElement("p", "search-placeholder", "Saisis au moins deux caracteres pour rechercher."));
+    return;
+  }
+  const sources = [
+    ...content.news.map((item) => ({ type: "Actualite", title: item.title, text: `${item.tag} ${item.body}`, href: "/actualites.html" })),
+    ...content.posts.map((item) => ({ type: "Article", title: item.title, text: `${item.category} ${item.excerpt}`, href: "/infos.html" })),
+    ...content.meetings.map((item) => ({ type: "Reunion", title: item.title, text: `${item.body} ${item.place} ${item.site}`, href: "/agenda.html" })),
+    ...content.documents.map((item) => ({ type: "Document", title: item.title, text: `${item.description} ${item.kind}`, href: "/documents.html" })),
+    ...content.members.map((item) => ({ type: "Membre", title: `${item.firstName} ${item.lastName}`, text: `${item.service} ${item.site} ${item.role}`, href: "/membres.html" }))
+  ].filter((item) => `${item.title} ${item.text}`.toLowerCase().includes(query)).slice(0, 30);
+  if (!sources.length) {
+    globalSearchResults.append(createElement("p", "search-placeholder", "Aucun resultat."));
+    return;
+  }
+  sources.forEach((item) => {
+    const link = createElement("a", "search-result");
+    link.href = item.href;
+    link.append(createElement("span", "tag tag-teal", item.type));
+    link.append(createElement("strong", "", item.title));
+    link.append(createElement("span", "", item.text.slice(0, 180)));
+    globalSearchResults.append(link);
+  });
+}
+
 async function loadContent() {
   try {
     const response = await fetch("/api/content", { headers: { Accept: "application/json" } });
     if (!response.ok) return;
     const payload = await response.json();
-    const content = payload.content;
-    renderNews(content.news || []);
-    renderPosts(content.posts || []);
-    renderMeetings(content.meetings || []);
-    renderDocuments(content.documents || []);
-    renderMembers(content.members || []);
+    publicContent = payload.content;
+    renderNews(publicContent.news || []);
+    renderPosts(publicContent.posts || []);
+    renderMeetings(publicContent.meetings || []);
+    renderDocuments(publicContent.documents || []);
+    renderMembers(publicContent.members || []);
+    renderFeatured(publicContent);
+    renderGlobalSearch(publicContent);
   } catch {
     // Keep the static fallback HTML.
   }
@@ -368,8 +500,9 @@ ideaForm?.addEventListener("submit", async (event) => {
       throw new Error("submission_failed");
     }
 
+    const responsePayload = await response.json();
     ideaForm.reset();
-    setStatus("Idée reçue. Elle sera publiée si le CSE la valide.", "success");
+    setStatus(`Idee recue. Ton code de suivi anonyme est ${responsePayload.trackingCode}. Conserve-le pour suivre son traitement.`, "success");
     await refreshStats();
   } catch {
     setStatus("L'envoi n'a pas abouti. Réessayez dans quelques instants.", "error");
@@ -377,6 +510,30 @@ ideaForm?.addEventListener("submit", async (event) => {
     submitButton?.removeAttribute("disabled");
   }
 });
+
+ideaTrackingForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const code = String(new FormData(ideaTrackingForm).get("trackingCode") || "").trim();
+  ideaTrackingStatus.textContent = "Recherche en cours...";
+  try {
+    const response = await fetch(`/api/ideas/track/${encodeURIComponent(code)}`, { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error("not_found");
+    const payload = await response.json();
+    const labels = { pending: "recue", approved: "retenue", in_progress: "en cours d'etude", treated: "traitee", rejected: "non retenue" };
+    ideaTrackingStatus.textContent = `Ta proposition est ${labels[payload.idea.status] || "mise a jour"}. ${payload.idea.reviewNote || ""}`.trim();
+    ideaTrackingStatus.dataset.state = "success";
+  } catch {
+    ideaTrackingStatus.textContent = "Code de suivi introuvable.";
+    ideaTrackingStatus.dataset.state = "error";
+  }
+});
+
+meetingSiteFilter?.addEventListener("change", () => renderMeetings(publicContent.meetings || []));
+documentSearch?.addEventListener("input", () => renderDocuments(publicContent.documents || []));
+documentKindFilter?.addEventListener("change", () => renderDocuments(publicContent.documents || []));
+memberSiteFilter?.addEventListener("change", () => renderMembers(publicContent.members || []));
+memberServiceFilter?.addEventListener("change", () => renderMembers(publicContent.members || []));
+globalSearchInput?.addEventListener("input", () => renderGlobalSearch(publicContent));
 
 loadContent();
 refreshStats();

@@ -5,11 +5,14 @@
   "description": "Site vitrine CSE avec boite a idees anonyme.",
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test",
+    "check": "node --check server.js && node --check public/app.js && node --check public/admin.js && node --check public/lecteur.js"
   },
   "dependencies": {
     "nodemailer": "^6.9.16",
     "pg": "^8.13.1",
+    "quill": "^2.0.3",
     "sanitize-html": "^2.14.0"
   },
   "engines": {

@@ -1,12 +1,12 @@
 import http from "node:http";
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
-import sanitizeHtml from "sanitize-html";
+import { cleanDate, cleanLongText, cleanText, normalizeDocumentKind, sanitizeRichText } from "./src/lib/content.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadLocalEnv(path.join(__dirname, ".env"));
@@ -23,8 +23,12 @@ const bootstrapAdminPassword = process.env.ADMIN_BOOTSTRAP_PASSWORD || "";
 const bootstrapAdminName = process.env.ADMIN_BOOTSTRAP_NAME || "Administrateur CSE";
 const sessionMaxAgeSeconds = Math.min(Math.max(Number(process.env.ADMIN_SESSION_MAX_AGE_SECONDS || 14_400), 900), 43_200);
 const mailSettingsEncryptionKey = parseEncryptionKey(process.env.MAIL_SETTINGS_ENCRYPTION_KEY || "");
+const voteCookieSecret = String(process.env.VOTE_COOKIE_SECRET || "");
 if (process.env.NODE_ENV === "production" && !mailSettingsEncryptionKey) {
   throw new Error("MAIL_SETTINGS_ENCRYPTION_KEY is required in production.");
+}
+if (process.env.NODE_ENV === "production" && voteCookieSecret.length < 32) {
+  throw new Error("VOTE_COOKIE_SECRET must contain at least 32 random characters in production.");
 }
 if (!databaseUrl) {
   throw new Error("DATABASE_URL is required. Configure PostgreSQL before starting cse-site.");
@@ -290,6 +294,36 @@ function ideasToCsv(ideas) {
   return `${headers.join(";")}\n${rows.join("\n")}\n`;
 }
 
+function icsEscape(value) {
+  return String(value || "").replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+}
+
+function meetingToIcs(meeting) {
+  const date = cleanDate(meeting.datetime);
+  const time = cleanText(meeting.time, 40).match(/^(\d{1,2})h(\d{2})?$/i);
+  const hour = String(Number(time?.[1] || 9)).padStart(2, "0");
+  const minute = String(Number(time?.[2] || 0)).padStart(2, "0");
+  const start = `${date.replace(/-/g, "")}T${hour}${minute}00`;
+  const endHour = String(Math.min(Number(hour) + 1, 23)).padStart(2, "0");
+  const end = `${date.replace(/-/g, "")}T${endHour}${minute}00`;
+  return [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//CSE SNS Security//Portail CSE//FR",
+    "BEGIN:VEVENT",
+    `UID:${meeting.id}@cse`,
+    `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "")}`,
+    `DTSTART:${start}`,
+    `DTEND:${end}`,
+    `SUMMARY:${icsEscape(meeting.title)}`,
+    `LOCATION:${icsEscape([meeting.place, meeting.site].filter(Boolean).join(" - "))}`,
+    `DESCRIPTION:${icsEscape(meeting.body)}`,
+    "END:VEVENT",
+    "END:VCALENDAR",
+    ""
+  ].join("\r\n");
+}
+
 function safeEqual(a, b) {
   const left = Buffer.from(String(a || ""));
   const right = Buffer.from(String(b || ""));
@@ -329,6 +363,26 @@ function isSecureRequest(req) {
 
 function sessionCookieName(req) {
   return isSecureRequest(req) ? "__Host-cse_admin_session" : "cse_admin_session";
+}
+
+function voteCookieName(req) {
+  return isSecureRequest(req) ? "__Host-cse_vote_identity" : "cse_vote_identity";
+}
+
+function signVoteIdentity(identity) {
+  return createHmac("sha256", voteCookieSecret || "development-vote-secret-only").update(identity).digest("base64url");
+}
+
+function getAnonymousVoterHash(req, res) {
+  const raw = parseCookies(req)[voteCookieName(req)] || "";
+  const [identity, signature] = raw.split(".");
+  if (identity && signature && safeEqual(signature, signVoteIdentity(identity))) {
+    return createHash("sha256").update(identity).digest("hex");
+  }
+  const nextIdentity = randomBytes(24).toString("base64url");
+  const nextValue = `${nextIdentity}.${signVoteIdentity(nextIdentity)}`;
+  res.setHeader("Set-Cookie", cookieHeader(voteCookieName(req), nextValue, { maxAge: 365 * 24 * 60 * 60, secure: isSecureRequest(req) }));
+  return createHash("sha256").update(nextIdentity).digest("hex");
 }
 
 function setTransportSecurityHeader(req, res) {
@@ -388,7 +442,7 @@ async function getAdminSession(req) {
      WHERE s.session_token_hash = $1
        AND s.expires_at > now()
        AND a.active = true
-       AND a.role IN ('owner', 'editor')`,
+       AND a.role IN ('owner', 'editor', 'moderator')`,
     [tokenHash]
   );
   if (!result.rows.length) return null;
@@ -406,6 +460,20 @@ async function requireAdmin(req, res) {
 
 function requireOwner(res, session) {
   if (session?.admin?.role === "owner") return true;
+  sendJson(res, 403, { ok: false, error: "forbidden" });
+  return false;
+}
+
+function hasAdminPermission(session, permission) {
+  const role = session?.admin?.role;
+  if (role === "owner") return true;
+  if (role === "editor") return ["content", "documents", "dashboard"].includes(permission);
+  if (role === "moderator") return ["ideas", "dashboard"].includes(permission);
+  return false;
+}
+
+function requireAdminPermission(res, session, permission) {
+  if (hasAdminPermission(session, permission)) return true;
   sendJson(res, 403, { ok: false, error: "forbidden" });
   return false;
 }
@@ -486,41 +554,6 @@ async function readBody(req, maxBytes = 8192) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function cleanText(value, maxLength) {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxLength);
-}
-
-function cleanLongText(value, maxLength) {
-  return String(value || "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\n{4,}/g, "\n\n\n")
-    .trim()
-    .slice(0, maxLength);
-}
-
-function sanitizeRichText(value, maxLength) {
-  const source = String(value || "").slice(0, maxLength * 4);
-  return sanitizeHtml(source, {
-    allowedTags: ["p", "br", "strong", "b", "em", "i", "u", "a", "ul", "ol", "li", "h2", "h3", "blockquote", "img"],
-    allowedAttributes: {
-      a: ["href", "target", "rel"],
-      img: ["src", "alt"]
-    },
-    allowedSchemes: ["https", "mailto"],
-    allowedSchemesByTag: { img: ["https", "data"] },
-    allowProtocolRelative: false,
-    transformTags: {
-      a: (tagName, attributes) => ({
-        tagName,
-        attribs: { href: attributes.href || "", target: "_blank", rel: "noopener noreferrer" }
-      })
-    }
-  }).trim().slice(0, maxLength);
-}
-
 function sanitizePhotoSource(value) {
   const source = cleanText(value, 1_000_000);
   if (/^https:\/\/[^\s]+$/i.test(source)) return source;
@@ -531,11 +564,6 @@ function sanitizePhotoSource(value) {
 function isValidEmail(value) {
   const email = cleanText(value, 180);
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
-function cleanDate(value) {
-  const cleaned = cleanText(value, 20);
-  return /^\d{4}-\d{2}-\d{2}$/.test(cleaned) ? cleaned : "";
 }
 
 function normalizeContent(rawContent) {
@@ -557,7 +585,9 @@ function normalizeContent(rawContent) {
       body: sanitizeRichText(item.body, 5000),
       date: cleanDate(item.date),
       status: ["draft", "published"].includes(item.status) ? item.status : "published",
-      featured: Boolean(item.featured)
+      featured: Boolean(item.featured),
+      scheduledFor: cleanDate(item.scheduledFor),
+      expiresAt: cleanDate(item.expiresAt)
     })).filter((item) => item.title && item.body) : [],
     meetings: Array.isArray(content.meetings) ? content.meetings.slice(0, 20).map((item) => ({
       id: cleanText(item.id, 80) || randomUUID(),
@@ -566,7 +596,8 @@ function normalizeContent(rawContent) {
       title: cleanText(item.title, 140),
       body: cleanLongText(item.body, 420),
       place: cleanText(item.place, 80),
-      time: cleanText(item.time, 40)
+      time: cleanText(item.time, 40),
+      site: cleanText(item.site, 100)
     })).filter((item) => item.title) : [],
     documents: Array.isArray(content.documents) ? content.documents.slice(0, 80).map((item) => ({
       id: cleanText(item.id, 80) || randomUUID(),
@@ -574,7 +605,10 @@ function normalizeContent(rawContent) {
       description: cleanText(item.description, 160),
       url: cleanText(item.url, 260),
       createdAt: cleanText(item.createdAt, 40) || new Date().toISOString(),
-      visibility: ["public", "private"].includes(item.visibility) ? item.visibility : "public"
+      visibility: ["public", "private"].includes(item.visibility) ? item.visibility : "public",
+      kind: normalizeDocumentKind(item.kind, item.title),
+      pinned: Boolean(item.pinned),
+      publishedAt: cleanDate(item.publishedAt) || cleanDate(item.createdAt)
     })).filter((item) => item.title && item.url.startsWith("/")) : [],
     members: Array.isArray(content.members) ? content.members.slice(0, 40).map((item) => ({
       id: cleanText(item.id, 80) || randomUUID(),
@@ -598,12 +632,15 @@ async function saveContent(content) {
 }
 
 function getPublicContent(content) {
+  const today = new Date().toISOString().slice(0, 10);
   return {
     ...content,
     posts: content.posts
-      .filter((post) => post.status === "published")
+      .filter((post) => post.status === "published" && (!post.scheduledFor || post.scheduledFor <= today) && (!post.expiresAt || post.expiresAt >= today))
       .sort((a, b) => Number(b.featured) - Number(a.featured) || String(b.date).localeCompare(String(a.date))),
-    documents: content.documents.filter((document) => document.visibility !== "private")
+    documents: content.documents
+      .filter((document) => document.visibility !== "private")
+      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || String(b.publishedAt || b.createdAt).localeCompare(String(a.publishedAt || a.createdAt)))
   };
 }
 
@@ -617,6 +654,72 @@ async function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS app_content (
       id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
       content jsonb NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id text PRIMARY KEY,
+      applied_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS site_news (
+      id text PRIMARY KEY,
+      tag text NOT NULL,
+      tag_style text NOT NULL,
+      title text NOT NULL,
+      body text NOT NULL,
+      event_date date,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS site_articles (
+      id text PRIMARY KEY,
+      category text NOT NULL,
+      title text NOT NULL,
+      excerpt text NOT NULL DEFAULT '',
+      body text NOT NULL,
+      event_date date,
+      status text NOT NULL,
+      featured boolean NOT NULL DEFAULT false,
+      scheduled_for date,
+      expires_at date,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS site_meetings (
+      id text PRIMARY KEY,
+      date_label text NOT NULL DEFAULT '',
+      event_date date,
+      title text NOT NULL,
+      body text NOT NULL DEFAULT '',
+      place text NOT NULL DEFAULT '',
+      meeting_time text NOT NULL DEFAULT '',
+      site text NOT NULL DEFAULT '',
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS site_documents (
+      id text PRIMARY KEY,
+      title text NOT NULL,
+      description text NOT NULL DEFAULT '',
+      url text NOT NULL,
+      created_at timestamptz NOT NULL,
+      visibility text NOT NULL,
+      kind text NOT NULL DEFAULT 'other',
+      pinned boolean NOT NULL DEFAULT false,
+      published_at date,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS cse_members (
+      id text PRIMARY KEY,
+      first_name text NOT NULL DEFAULT '',
+      last_name text NOT NULL DEFAULT '',
+      service text NOT NULL DEFAULT '',
+      site text NOT NULL DEFAULT '',
+      role text NOT NULL DEFAULT 'Titulaire',
+      photo text NOT NULL DEFAULT '',
+      email text NOT NULL DEFAULT '',
       updated_at timestamptz NOT NULL DEFAULT now()
     );
 
@@ -636,6 +739,19 @@ async function initializeDatabase() {
 
     CREATE INDEX IF NOT EXISTS ideas_status_idx ON ideas (status);
     CREATE INDEX IF NOT EXISTS ideas_created_at_idx ON ideas (created_at DESC);
+
+    ALTER TABLE ideas ADD COLUMN IF NOT EXISTS tracking_code text NOT NULL DEFAULT '';
+    CREATE UNIQUE INDEX IF NOT EXISTS ideas_tracking_code_idx ON ideas (tracking_code) WHERE tracking_code <> '';
+
+    CREATE TABLE IF NOT EXISTS idea_votes (
+      id text PRIMARY KEY,
+      idea_id text NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+      voter_hash text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE (idea_id, voter_hash)
+    );
+
+    CREATE INDEX IF NOT EXISTS idea_votes_idea_id_idx ON idea_votes (idea_id);
 
     CREATE TABLE IF NOT EXISTS admin_accounts (
       id text PRIMARY KEY,
@@ -698,14 +814,50 @@ async function initializeDatabase() {
     );
   `);
   await dbPool.query("UPDATE admin_accounts SET role = 'owner' WHERE role = 'admin'");
+  await dbPool.query("UPDATE admin_accounts SET role = 'editor' WHERE role NOT IN ('owner', 'editor', 'moderator')");
+  await backfillIdeaTrackingCodes();
+  await migrateLegacyContent();
   await seedBootstrapAdmin();
 }
 
 async function seedDefaultContent() {
-  const contentCount = Number((await dbPool.query("SELECT count(*)::int AS count FROM app_content")).rows[0].count);
+  const contentCount = Number((await dbPool.query("SELECT count(*)::int AS count FROM site_news")).rows[0].count);
   if (contentCount === 0) {
     await saveContentToDatabase(defaultContent);
   }
+}
+
+function dateValue(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value.slice(0, 10);
+  return value.toISOString?.().slice(0, 10) || "";
+}
+
+function timestampValue(value) {
+  if (!value) return "";
+  return value.toISOString?.() || String(value);
+}
+
+function createIdeaTrackingCode() {
+  return `CSE-${randomBytes(5).toString("hex").toUpperCase()}`;
+}
+
+async function backfillIdeaTrackingCodes() {
+  const result = await dbPool.query("SELECT id FROM ideas WHERE tracking_code = ''");
+  for (const row of result.rows) {
+    await dbPool.query("UPDATE ideas SET tracking_code = $2 WHERE id = $1", [row.id, createIdeaTrackingCode()]);
+  }
+}
+
+async function migrateLegacyContent() {
+  const migrationId = "20260619_relational_content";
+  const migrated = await dbPool.query("SELECT 1 FROM schema_migrations WHERE id = $1", [migrationId]);
+  if (migrated.rows.length) return;
+
+  const legacy = await dbPool.query("SELECT content FROM app_content WHERE id = 1");
+  const content = legacy.rows.length ? normalizeContent(legacy.rows[0].content) : normalizeContent(defaultContent);
+  await persistContentRows(dbPool, content);
+  await dbPool.query("INSERT INTO schema_migrations (id) VALUES ($1)", [migrationId]);
 }
 
 async function seedBootstrapAdmin() {
@@ -722,19 +874,92 @@ async function seedBootstrapAdmin() {
 }
 
 async function getContentFromDatabase() {
-  const result = await dbPool.query("SELECT content FROM app_content WHERE id = 1");
-  if (!result.rows.length) return structuredClone(defaultContent);
-  return normalizeContent(result.rows[0].content);
+  const [news, posts, meetings, documents, members] = await Promise.all([
+    dbPool.query("SELECT * FROM site_news ORDER BY event_date DESC NULLS LAST, updated_at DESC"),
+    dbPool.query("SELECT * FROM site_articles ORDER BY event_date DESC NULLS LAST, updated_at DESC"),
+    dbPool.query("SELECT * FROM site_meetings ORDER BY event_date ASC NULLS LAST, updated_at DESC"),
+    dbPool.query("SELECT * FROM site_documents ORDER BY pinned DESC, published_at DESC NULLS LAST, created_at DESC"),
+    dbPool.query("SELECT * FROM cse_members ORDER BY last_name ASC, first_name ASC")
+  ]);
+  return normalizeContent({
+    news: news.rows.map((row) => ({
+      id: row.id, tag: row.tag, tagStyle: row.tag_style, title: row.title, body: row.body, date: dateValue(row.event_date)
+    })),
+    posts: posts.rows.map((row) => ({
+      id: row.id, category: row.category, title: row.title, excerpt: row.excerpt, body: row.body, date: dateValue(row.event_date),
+      status: row.status, featured: row.featured, scheduledFor: dateValue(row.scheduled_for), expiresAt: dateValue(row.expires_at)
+    })),
+    meetings: meetings.rows.map((row) => ({
+      id: row.id, dateLabel: row.date_label, datetime: dateValue(row.event_date), title: row.title, body: row.body,
+      place: row.place, time: row.meeting_time, site: row.site
+    })),
+    documents: documents.rows.map((row) => ({
+      id: row.id, title: row.title, description: row.description, url: row.url, createdAt: timestampValue(row.created_at),
+      visibility: row.visibility, kind: row.kind, pinned: row.pinned, publishedAt: dateValue(row.published_at)
+    })),
+    members: members.rows.map((row) => ({
+      id: row.id, firstName: row.first_name, lastName: row.last_name, service: row.service, site: row.site,
+      role: row.role, photo: row.photo, email: row.email
+    }))
+  });
+}
+
+async function persistContentRows(client, content) {
+  await client.query("DELETE FROM site_news");
+  await client.query("DELETE FROM site_articles");
+  await client.query("DELETE FROM site_meetings");
+  await client.query("DELETE FROM site_documents");
+  await client.query("DELETE FROM cse_members");
+
+  for (const item of content.news) {
+    await client.query(
+      "INSERT INTO site_news (id, tag, tag_style, title, body, event_date) VALUES ($1,$2,$3,$4,$5,$6)",
+      [item.id, item.tag, item.tagStyle, item.title, item.body, item.date || null]
+    );
+  }
+  for (const item of content.posts) {
+    await client.query(
+      `INSERT INTO site_articles (id, category, title, excerpt, body, event_date, status, featured, scheduled_for, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [item.id, item.category, item.title, item.excerpt, item.body, item.date || null, item.status, item.featured, item.scheduledFor || null, item.expiresAt || null]
+    );
+  }
+  for (const item of content.meetings) {
+    await client.query(
+      `INSERT INTO site_meetings (id, date_label, event_date, title, body, place, meeting_time, site)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [item.id, item.dateLabel, item.datetime || null, item.title, item.body, item.place, item.time, item.site]
+    );
+  }
+  for (const item of content.documents) {
+    await client.query(
+      `INSERT INTO site_documents (id, title, description, url, created_at, visibility, kind, pinned, published_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [item.id, item.title, item.description, item.url, item.createdAt, item.visibility, item.kind, item.pinned, item.publishedAt || null]
+    );
+  }
+  for (const item of content.members) {
+    await client.query(
+      `INSERT INTO cse_members (id, first_name, last_name, service, site, role, photo, email)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [item.id, item.firstName, item.lastName, item.service, item.site, item.role, item.photo, item.email]
+    );
+  }
 }
 
 async function saveContentToDatabase(content) {
   const normalized = normalizeContent(content);
-  await dbPool.query(
-    `INSERT INTO app_content (id, content, updated_at)
-     VALUES (1, $1::jsonb, now())
-     ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
-    [JSON.stringify(normalized)]
-  );
+  const client = await dbPool.connect();
+  try {
+    await client.query("BEGIN");
+    await persistContentRows(client, normalized);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
   return normalized;
 }
 
@@ -750,48 +975,15 @@ function rowToIdea(row) {
     reviewedAt: row.reviewed_at?.toISOString?.() || row.reviewed_at || "",
     reviewNote: row.review_note,
     targetMeetingId: row.target_meeting_id,
-    updatedAt: row.updated_at?.toISOString?.() || row.updated_at
+    updatedAt: row.updated_at?.toISOString?.() || row.updated_at,
+    trackingCode: row.tracking_code,
+    voted: Boolean(row.voted)
   });
 }
 
 async function getIdeasFromDatabase() {
   const result = await dbPool.query("SELECT * FROM ideas ORDER BY created_at DESC");
   return { ideas: result.rows.map(rowToIdea) };
-}
-
-async function saveIdeasToDatabase(db) {
-  const client = await dbPool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query("DELETE FROM ideas");
-    for (const idea of db.ideas.map(normalizeIdea).filter((item) => item.message)) {
-      await client.query(
-        `INSERT INTO ideas (
-          id, created_at, category, message, context, status, votes,
-          reviewed_at, review_note, target_meeting_id, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [
-          idea.id,
-          idea.createdAt,
-          idea.category,
-          idea.message,
-          idea.context,
-          idea.status,
-          idea.votes,
-          idea.reviewedAt || null,
-          idea.reviewNote,
-          idea.targetMeetingId,
-          idea.updatedAt
-        ]
-      );
-    }
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
 }
 
 async function getIdeasDb() {
@@ -811,15 +1003,13 @@ function normalizeIdea(idea) {
     reviewedAt: cleanText(idea.reviewedAt, 40),
     reviewNote: cleanText(idea.reviewNote, 240),
     targetMeetingId: cleanText(idea.targetMeetingId, 80),
-    updatedAt: cleanText(idea.updatedAt, 40) || cleanText(idea.createdAt, 40) || new Date().toISOString()
+    updatedAt: cleanText(idea.updatedAt, 40) || cleanText(idea.createdAt, 40) || new Date().toISOString(),
+    trackingCode: cleanText(idea.trackingCode, 32).toUpperCase(),
+    voted: Boolean(idea.voted)
   };
 }
 
 await initializeStorage();
-
-async function saveIdeasDb(db) {
-  await saveIdeasToDatabase(db);
-}
 
 function publicIdea(idea) {
   return {
@@ -829,7 +1019,8 @@ function publicIdea(idea) {
     message: idea.message,
     context: idea.context,
     status: idea.status,
-    votes: Number(idea.votes || 0)
+    votes: Number(idea.votes || 0),
+    voted: Boolean(idea.voted)
   };
 }
 
@@ -859,7 +1050,8 @@ async function handleIdeaSubmission(req, res) {
     reviewedAt: "",
     reviewNote: "",
     targetMeetingId: "",
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    trackingCode: createIdeaTrackingCode()
   };
 
   if (idea.message.length < 12) {
@@ -867,14 +1059,18 @@ async function handleIdeaSubmission(req, res) {
     return;
   }
 
-  const db = await getIdeasDb();
-  db.ideas.unshift(idea);
-  await saveIdeasDb(db);
+  await dbPool.query(
+    `INSERT INTO ideas (
+      id, created_at, category, message, context, status, votes,
+      reviewed_at, review_note, target_meeting_id, updated_at, tracking_code
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [idea.id, idea.createdAt, idea.category, idea.message, idea.context, idea.status, 0, null, "", "", idea.updatedAt, idea.trackingCode]
+  );
   notify("Nouvelle idee CSE", `${idea.category}: ${idea.message.slice(0, 180)}`);
-  sendJson(res, 201, { ok: true, id: idea.id });
+  sendJson(res, 201, { ok: true, id: idea.id, trackingCode: idea.trackingCode });
 }
 
-async function getStats() {
+async function getAdminStats() {
   const [content, ideasDb] = await Promise.all([getContent(), getIdeasDb()]);
   const publicContent = getPublicContent(content);
   const ideas = ideasDb.ideas;
@@ -888,7 +1084,22 @@ async function getStats() {
     pendingIdeas: ideas.filter((idea) => idea.status === "pending").length,
     approvedIdeas: ideas.filter((idea) => idea.status === "approved").length,
     inProgressIdeas: ideas.filter((idea) => idea.status === "in_progress").length,
-    treatedIdeas: ideas.filter((idea) => idea.status === "treated").length
+    treatedIdeas: ideas.filter((idea) => idea.status === "treated").length,
+    draftPosts: content.posts.filter((post) => post.status === "draft").length,
+    scheduledPosts: content.posts.filter((post) => post.scheduledFor && post.scheduledFor > new Date().toISOString().slice(0, 10)).length,
+    nextMeeting: content.meetings.find((meeting) => !meeting.datetime || meeting.datetime >= new Date().toISOString().slice(0, 10)) || null
+  };
+}
+
+async function getPublicStats() {
+  const [content, ideas] = await Promise.all([getContent(), dbPool.query("SELECT count(*)::int AS count FROM ideas WHERE status = ANY($1::text[])", [[...publicIdeaStatuses]])]);
+  const publicContent = getPublicContent(content);
+  return {
+    news: publicContent.news.length,
+    posts: publicContent.posts.length,
+    documents: publicContent.documents.length,
+    members: publicContent.members.length,
+    ideas: Number(ideas.rows[0].count)
   };
 }
 
@@ -899,16 +1110,70 @@ async function handleIdeaVote(req, res, ideaId) {
     return;
   }
 
-  const db = await getIdeasDb();
-  const idea = db.ideas.find((item) => item.id === ideaId && publicIdeaStatuses.has(item.status));
-  if (!idea) {
+  const voterHash = getAnonymousVoterHash(req, res);
+  const client = await dbPool.connect();
+  try {
+    await client.query("BEGIN");
+    const idea = await client.query("SELECT * FROM ideas WHERE id = $1 AND status = ANY($2::text[]) FOR UPDATE", [ideaId, [...publicIdeaStatuses]]);
+    if (!idea.rows.length) {
+      await client.query("ROLLBACK");
+      sendJson(res, 404, { ok: false, error: "not_found" });
+      return;
+    }
+    const vote = await client.query(
+      "INSERT INTO idea_votes (id, idea_id, voter_hash) VALUES ($1,$2,$3) ON CONFLICT (idea_id, voter_hash) DO NOTHING RETURNING id",
+      [randomUUID(), ideaId, voterHash]
+    );
+    if (!vote.rows.length) {
+      await client.query("ROLLBACK");
+      sendJson(res, 409, { ok: false, error: "already_voted" });
+      return;
+    }
+    const updated = await client.query("UPDATE ideas SET votes = votes + 1, updated_at = now() WHERE id = $1 RETURNING *", [ideaId]);
+    await client.query("COMMIT");
+    sendJson(res, 200, { ok: true, idea: publicIdea({ ...rowToIdea(updated.rows[0]), voted: true }) });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function getPublicIdeas(req, res) {
+  const voterHash = getAnonymousVoterHash(req, res);
+  const result = await dbPool.query(
+    `SELECT i.*, EXISTS(
+      SELECT 1 FROM idea_votes v WHERE v.idea_id = i.id AND v.voter_hash = $1
+    ) AS voted
+    FROM ideas i
+    WHERE i.status = ANY($2::text[])
+    ORDER BY i.votes DESC, i.created_at DESC`,
+    [voterHash, [...publicIdeaStatuses]]
+  );
+  sendJson(res, 200, { ok: true, ideas: result.rows.map((row) => publicIdea(rowToIdea(row))) });
+}
+
+async function handleIdeaTracking(res, trackingCode) {
+  const result = await dbPool.query(
+    "SELECT category, status, created_at, review_note, updated_at FROM ideas WHERE tracking_code = $1",
+    [cleanText(trackingCode, 32).toUpperCase()]
+  );
+  if (!result.rows.length) {
     sendJson(res, 404, { ok: false, error: "not_found" });
     return;
   }
-
-  idea.votes = Number(idea.votes || 0) + 1;
-  await saveIdeasDb(db);
-  sendJson(res, 200, { ok: true, idea: publicIdea(idea) });
+  const row = result.rows[0];
+  sendJson(res, 200, {
+    ok: true,
+    idea: {
+      category: row.category,
+      status: row.status,
+      createdAt: timestampValue(row.created_at),
+      reviewNote: row.review_note,
+      updatedAt: timestampValue(row.updated_at)
+    }
+  });
 }
 
 async function handleAdminLogin(req, res) {
@@ -1122,6 +1387,25 @@ async function handleAdminAccountsList(req, res) {
   sendJson(res, 200, { ok: true, admins: result.rows.map((row) => ({ ...publicAdminAccount(row), active: row.active })) });
 }
 
+async function handleAdminAuditList(req, res) {
+  const result = await dbPool.query(
+    `SELECT l.action, l.metadata, l.created_at, a.display_name, a.email
+     FROM admin_audit_log l
+     LEFT JOIN admin_accounts a ON a.id = l.admin_id
+     ORDER BY l.created_at DESC
+     LIMIT 80`
+  );
+  sendJson(res, 200, {
+    ok: true,
+    entries: result.rows.map((row) => ({
+      action: row.action,
+      metadata: row.metadata,
+      createdAt: timestampValue(row.created_at),
+      actor: row.display_name || row.email || "Systeme"
+    }))
+  });
+}
+
 async function handleAdminAccountCreate(req, res, session) {
   let body;
   try {
@@ -1133,7 +1417,7 @@ async function handleAdminAccountCreate(req, res, session) {
   const email = cleanText(body.email, 180).toLowerCase();
   const displayName = cleanText(body.displayName, 120);
   const password = String(body.password || "");
-  const role = body.role === "owner" ? "owner" : "editor";
+  const role = ["owner", "editor", "moderator"].includes(body.role) ? body.role : "editor";
   if (!isValidEmail(email) || password.length < 12) {
     sendJson(res, 422, { ok: false, error: "invalid_admin_account" });
     return;
@@ -1168,7 +1452,7 @@ async function handleAdminAccountUpdate(req, res, accountId, session) {
   const current = existing.rows[0];
   const displayName = cleanText(body.displayName, 120);
   const active = body.active !== false;
-  const role = ["owner", "editor"].includes(body.role) ? body.role : current.role;
+  const role = ["owner", "editor", "moderator"].includes(body.role) ? body.role : current.role;
   const password = String(body.password || "");
   if (accountId === session.admin.id && (!active || role !== "owner")) {
     sendJson(res, 422, { ok: false, error: "cannot_reduce_own_access" });
@@ -1224,19 +1508,18 @@ async function handleAdminIdeaUpdate(req, res, ideaId, session) {
     return;
   }
 
-  const db = await getIdeasDb();
-  const idea = db.ideas.find((item) => item.id === ideaId);
-  if (!idea) {
+  const result = await dbPool.query(
+    `UPDATE ideas
+     SET status = $2, reviewed_at = now(), review_note = $3, target_meeting_id = $4, updated_at = now()
+     WHERE id = $1
+     RETURNING *`,
+    [ideaId, status, cleanText(body.reviewNote, 240), cleanText(body.targetMeetingId, 80)]
+  );
+  if (!result.rows.length) {
     sendJson(res, 404, { ok: false, error: "not_found" });
     return;
   }
-
-  idea.status = status;
-  idea.reviewedAt = new Date().toISOString();
-  idea.reviewNote = cleanText(body.reviewNote, 240);
-  idea.targetMeetingId = cleanText(body.targetMeetingId, 80);
-  idea.updatedAt = new Date().toISOString();
-  await saveIdeasDb(db);
+  const idea = rowToIdea(result.rows[0]);
   await auditAdminAction(session, "idea.updated", { ideaId, status: idea.status });
   sendJson(res, 200, { ok: true, idea });
 }
@@ -1285,6 +1568,9 @@ async function handleAdminDocumentUpload(req, res, session) {
   const title = cleanText(body.title, 160);
   const description = cleanText(body.description, 160);
   const visibility = ["public", "private"].includes(body.visibility) ? body.visibility : "public";
+  const kind = ["pv", "odj", "avantages", "guide", "other"].includes(body.kind) ? body.kind : "other";
+  const pinned = Boolean(body.pinned);
+  const publishedAt = cleanDate(body.publishedAt) || new Date().toISOString().slice(0, 10);
   const base64 = String(body.dataBase64 || "");
   const ext = path.extname(originalName).toLowerCase();
 
@@ -1310,7 +1596,10 @@ async function handleAdminDocumentUpload(req, res, session) {
     description,
     url: `/uploads/${fileName}`,
     createdAt: new Date().toISOString(),
-    visibility
+    visibility,
+    kind,
+    pinned,
+    publishedAt
   };
   content.documents.unshift(document);
   const savedContent = await saveContent(content);
@@ -1390,12 +1679,13 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === "GET" && url.pathname === "/healthz") {
-      sendJson(res, 200, { ok: true });
+      await dbPool.query("SELECT 1");
+      sendJson(res, 200, { ok: true, database: "ok" });
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/api/stats") {
-      sendJson(res, 200, { ok: true, ...(await getStats()) });
+      sendJson(res, 200, { ok: true, ...(await getPublicStats()) });
       return;
     }
 
@@ -1404,13 +1694,26 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    const meetingIcsMatch = url.pathname.match(/^\/api\/meetings\/([^/]+)\.ics$/);
+    if (req.method === "GET" && meetingIcsMatch) {
+      const content = await getContent();
+      const meeting = content.meetings.find((item) => item.id === meetingIcsMatch[1] && item.datetime);
+      if (!meeting) {
+        sendJson(res, 404, { ok: false, error: "not_found" });
+        return;
+      }
+      sendText(res, 200, "text/calendar; charset=utf-8", meetingToIcs(meeting), "reunion-cse.ics");
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/ideas/approved") {
-      const db = await getIdeasDb();
-      const ideas = db.ideas
-        .filter((idea) => publicIdeaStatuses.has(idea.status))
-        .sort((a, b) => Number(b.votes || 0) - Number(a.votes || 0) || String(b.createdAt).localeCompare(String(a.createdAt)))
-        .map(publicIdea);
-      sendJson(res, 200, { ok: true, ideas });
+      await getPublicIdeas(req, res);
+      return;
+    }
+
+    const trackingMatch = url.pathname.match(/^\/api\/ideas\/track\/([^/]+)$/);
+    if (req.method === "GET" && trackingMatch) {
+      await handleIdeaTracking(res, trackingMatch[1]);
       return;
     }
 
@@ -1442,22 +1745,31 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (req.method === "GET" && url.pathname === "/api/admin/dashboard") {
+        if (!requireAdminPermission(res, session, "dashboard")) return;
+        sendJson(res, 200, { ok: true, ...(await getAdminStats()) });
+        return;
+      }
+
       if (req.method === "POST" && url.pathname === "/api/admin/logout") {
         await handleAdminLogout(req, res, session);
         return;
       }
 
       if (req.method === "GET" && url.pathname === "/api/admin/content") {
+        if (!requireAdminPermission(res, session, "content")) return;
         sendJson(res, 200, { ok: true, content: await getContent() });
         return;
       }
 
       if (req.method === "PUT" && url.pathname === "/api/admin/content") {
+        if (!requireAdminPermission(res, session, "content")) return;
         await handleAdminContentUpdate(req, res, session);
         return;
       }
 
       if (req.method === "POST" && url.pathname === "/api/admin/documents") {
+        if (!requireAdminPermission(res, session, "documents")) return;
         await handleAdminDocumentUpload(req, res, session);
         return;
       }
@@ -1486,6 +1798,12 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      if (req.method === "GET" && url.pathname === "/api/admin/audit") {
+        if (!requireOwner(res, session)) return;
+        await handleAdminAuditList(req, res);
+        return;
+      }
+
       if (req.method === "POST" && url.pathname === "/api/admin/admins") {
         if (!requireOwner(res, session)) return;
         await handleAdminAccountCreate(req, res, session);
@@ -1493,12 +1811,14 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === "GET" && url.pathname === "/api/admin/ideas.csv") {
+        if (!requireAdminPermission(res, session, "ideas")) return;
         const db = await getIdeasDb();
         sendText(res, 200, "text/csv; charset=utf-8", ideasToCsv(db.ideas), `idees-cse-${new Date().toISOString().slice(0, 10)}.csv`);
         return;
       }
 
       if (req.method === "GET" && url.pathname === "/api/admin/ideas") {
+        if (!requireAdminPermission(res, session, "ideas")) return;
         const db = await getIdeasDb();
         sendJson(res, 200, { ok: true, ideas: db.ideas });
         return;
@@ -1506,6 +1826,7 @@ const server = http.createServer(async (req, res) => {
 
       const adminIdeaMatch = url.pathname.match(/^\/api\/admin\/ideas\/([^/]+)$/);
       if (req.method === "PATCH" && adminIdeaMatch) {
+        if (!requireAdminPermission(res, session, "ideas")) return;
         await handleAdminIdeaUpdate(req, res, adminIdeaMatch[1], session);
         return;
       }
