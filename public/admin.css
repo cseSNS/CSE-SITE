@@ -1,6 +1,6 @@
 .admin-body {
   min-height: 100vh;
-  background: #f4f7f6;
+  background: var(--paper);
 }
 
 [hidden] {
@@ -16,7 +16,7 @@
   justify-content: space-between;
   gap: 18px;
   border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.96);
   padding: 14px max(20px, calc((100vw - 1240px) / 2));
   backdrop-filter: blur(16px);
 }
@@ -29,18 +29,18 @@
 
 .admin-tabs button {
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--white);
-  color: #304050;
+  color: var(--ink);
   cursor: pointer;
   font-weight: 850;
   padding: 10px 12px;
 }
 
 .admin-tabs button.is-active {
-  border-color: var(--teal);
-  background: #edf7f5;
-  color: var(--teal-dark);
+  border-color: var(--ink);
+  background: var(--pink);
+  color: var(--ink);
 }
 
 .admin-header-actions {
@@ -65,7 +65,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--white);
-  box-shadow: 0 12px 34px rgba(21, 32, 43, 0.06);
+  box-shadow: var(--shadow);
 }
 
 .admin-login {
@@ -106,7 +106,7 @@
 .admin-field textarea {
   width: 100%;
   border: 1px solid #cbd7de;
-  border-radius: 8px;
+  border-radius: 4px;
   background: #fbfdfc;
   color: var(--ink);
   outline: none;
@@ -133,7 +133,7 @@
   min-height: 230px;
   overflow: auto;
   border: 1px solid #cbd7de;
-  border-radius: 8px;
+  border-radius: 4px;
   background: #fff;
   color: var(--ink);
   outline: none;
@@ -141,13 +141,13 @@
 }
 
 .rich-editor:focus {
-  border-color: var(--teal);
-  box-shadow: 0 0 0 3px rgba(41, 132, 124, 0.12);
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px rgba(254, 210, 242, 0.72);
 }
 
 .rich-editor img {
   max-width: 100%;
-  border-radius: 8px;
+  border-radius: 4px;
 }
 
 .admin-app {
@@ -196,7 +196,9 @@
 
 .admin-panel-heading h2 {
   margin: 0;
+  font-family: "MuseoModerno", Inter, sans-serif;
   font-size: clamp(1.8rem, 4vw, 3rem);
+  font-weight: 500;
   line-height: 1;
 }
 
@@ -271,15 +273,15 @@
 }
 
 .button-danger {
-  border-color: #f1c7bd;
-  background: #fff0ea;
-  color: #9d3525;
+  border-color: #edb7d8;
+  background: var(--pink-wash);
+  color: var(--ink);
 }
 
 .button-success {
-  border-color: #c5e3df;
-  background: #edf7f5;
-  color: var(--teal-dark);
+  border-color: var(--pink-strong);
+  background: var(--pink);
+  color: var(--ink);
 }
 
 .editor-grid {
@@ -293,7 +295,7 @@
   gap: 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: #fbfdfc;
+  background: #fbfbfc;
   padding: 14px;
 }
 
@@ -345,7 +347,7 @@
 .member-preview img {
   width: 54px;
   height: 54px;
-  border-radius: 8px;
+  border-radius: 4px;
   object-fit: cover;
 }
 

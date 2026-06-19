@@ -212,10 +212,10 @@ function setSecurityHeaders(res) {
     [
       "default-src 'self'",
       "img-src 'self' https: data:",
-      "style-src 'self'",
+      "style-src 'self' https://fonts.googleapis.com",
       "script-src 'self'",
       "connect-src 'self'",
-      "font-src 'self'",
+      "font-src 'self' https://fonts.gstatic.com",
       "base-uri 'self'",
       "form-action 'self'",
       "frame-ancestors 'none'"
