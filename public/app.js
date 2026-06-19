@@ -13,6 +13,9 @@ const memberList = document.querySelector("[data-member-list]");
 const approvedIdeasList = document.querySelector("[data-approved-ideas]");
 const nextMeetingTitle = document.querySelector("[data-next-meeting-title]");
 const nextMeetingMeta = document.querySelector("[data-next-meeting-meta]");
+const publicDocumentViewer = document.querySelector("[data-public-document-viewer]");
+const publicDocumentTitle = document.querySelector("[data-public-document-title]");
+const publicPdfFrame = document.querySelector("[data-public-pdf-frame]");
 
 navToggle?.addEventListener("click", () => {
   const isOpen = nav?.classList.toggle("is-open") ?? false;
@@ -202,6 +205,14 @@ function renderDocuments(items) {
     const viewerParams = new URLSearchParams({ document: item.url, title: item.title || "Document CSE" });
     link.href = `/lecteur.html?${viewerParams.toString()}`;
     link.setAttribute("aria-label", `Consulter ${item.title || "le document"}`);
+    link.addEventListener("click", (event) => {
+      if (!publicDocumentViewer || !publicPdfFrame || !item.url) return;
+      event.preventDefault();
+      publicDocumentTitle.textContent = item.title || "Document CSE";
+      publicPdfFrame.src = item.url;
+      publicDocumentViewer.hidden = false;
+      publicDocumentViewer.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
     link.append(createElement("span", "doc-icon", "PDF"));
     const copy = createElement("span");
     copy.append(createElement("strong", "", item.title));
@@ -210,6 +221,12 @@ function renderDocuments(items) {
     documentList.append(link);
   });
 }
+
+document.querySelector("[data-close-public-document-viewer]")?.addEventListener("click", () => {
+  if (!publicDocumentViewer || !publicPdfFrame) return;
+  publicPdfFrame.removeAttribute("src");
+  publicDocumentViewer.hidden = true;
+});
 
 function initials(member) {
   return `${member.firstName?.[0] || ""}${member.lastName?.[0] || ""}`.toUpperCase() || "CSE";
