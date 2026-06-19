@@ -1,0 +1,13 @@
+{
+  "name": "cse-vitrine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Site vitrine CSE avec boite a idees anonyme.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

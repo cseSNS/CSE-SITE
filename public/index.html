@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Espace CSE pour suivre les actualites, reunions, PV et idees collaborateur.">
+    <title>CSE | Accueil</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="site-header" data-header>
+      <a class="brand" href="/" aria-label="Accueil CSE">
+        <span class="brand-mark">CSE</span>
+        <span class="brand-copy">Espace collaborateurs</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-label="Ouvrir le menu" aria-expanded="false" data-nav-toggle>
+        <span></span>
+        <span></span>
+      </button>
+      <nav class="main-nav" data-nav>
+        <a href="/actualites.html">Actualit&eacute;s</a>
+        <a href="/infos.html">Infos CSE</a>
+        <a href="/agenda.html">Agenda</a>
+        <a href="/documents.html">PV &amp; documents</a>
+        <a href="/idees.html">Id&eacute;es</a>
+        <a href="/membres.html">Membres</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero" id="accueil">
+        <img
+          class="hero-photo"
+          src="https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1800&q=82"
+          alt="Espace de travail lumineux avec tableau d'affichage et coin convivial"
+        >
+        <div class="hero-overlay"></div>
+        <div class="hero-content reveal">
+          <p class="eyebrow">CSE entreprise</p>
+          <h1>Toute la vie CSE, au m&ecirc;me endroit.</h1>
+          <p class="hero-lead">
+            Un espace simple pour suivre les actualit&eacute;s, retrouver les PV, voter les sujets utiles et contacter vos repr&eacute;sentants.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="/idees.html">Partager une id&eacute;e</a>
+            <a class="button button-secondary" href="/documents.html">Voir les PV</a>
+          </div>
+        </div>
+        <div class="hero-panel reveal" aria-label="Prochain rendez-vous CSE">
+          <span class="panel-label">Prochaine r&eacute;union</span>
+          <strong data-next-meeting-title>Chargement</strong>
+          <span data-next-meeting-meta>Agenda CSE</span>
+        </div>
+      </section>
+
+      <section class="quick-strip" aria-label="Informations principales">
+        <article>
+          <span data-news-count>0</span>
+          <p>Actualit&eacute;s publi&eacute;es</p>
+        </article>
+        <article>
+          <span data-document-count>0</span>
+          <p>Documents disponibles</p>
+        </article>
+        <article>
+          <span data-idea-count>0</span>
+          <p>Id&eacute;es re&ccedil;ues</p>
+        </article>
+      </section>
+
+      <section class="section dashboard-section">
+        <div class="section-heading reveal">
+          <p class="eyebrow">Vue d'ensemble</p>
+          <h2>Ce qu'il faut voir en premier</h2>
+        </div>
+        <div class="dashboard-grid">
+          <article class="dashboard-panel reveal">
+            <div class="panel-heading">
+              <h3>Derni&egrave;res actualit&eacute;s</h3>
+              <a href="/actualites.html">Tout voir</a>
+            </div>
+            <div class="news-grid compact-list" data-news-list data-limit="3"></div>
+          </article>
+
+          <article class="dashboard-panel reveal">
+            <div class="panel-heading">
+              <h3>Infos CSE</h3>
+              <a href="/infos.html">Lire</a>
+            </div>
+            <div class="post-list compact-posts" data-post-list data-limit="2"></div>
+          </article>
+
+          <article class="dashboard-panel reveal">
+            <div class="panel-heading">
+              <h3>Prochains rendez-vous</h3>
+              <a href="/agenda.html">Agenda</a>
+            </div>
+            <div class="timeline compact-timeline" data-meeting-list data-limit="3"></div>
+          </article>
+
+          <article class="dashboard-panel reveal">
+            <div class="panel-heading">
+              <h3>Derniers documents</h3>
+              <a href="/documents.html">Biblioth&egrave;que</a>
+            </div>
+            <div class="documents-list compact-documents" data-document-list data-limit="3"></div>
+          </article>
+
+          <article class="dashboard-panel reveal">
+            <div class="panel-heading">
+              <h3>Id&eacute;es &agrave; soutenir</h3>
+              <a href="/idees.html">Voter</a>
+            </div>
+            <div class="ideas-public-list compact-ideas" data-approved-ideas data-limit="3">
+              <article class="empty-state">
+                <h3>Aucune id&eacute;e valid&eacute;e</h3>
+                <p>Les propositions valid&eacute;es par le CSE appara&icirc;tront ici.</p>
+              </article>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>CSE &middot; Espace collaborateurs</span>
+      <a href="/confidentialite.html">Confidentialit&eacute;</a>
+    </footer>
+  </body>
+</html>

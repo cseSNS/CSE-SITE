@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Boite a idees anonyme du CSE">
+    <title>CSE | Id&eacute;es</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="site-header" data-header>
+      <a class="brand" href="/" aria-label="Accueil CSE"><span class="brand-mark">CSE</span><span class="brand-copy">Espace collaborateurs</span></a>
+      <button class="nav-toggle" type="button" aria-label="Ouvrir le menu" aria-expanded="false" data-nav-toggle><span></span><span></span></button>
+      <nav class="main-nav" data-nav>
+        <a href="/actualites.html">Actualit&eacute;s</a>
+        <a href="/infos.html">Infos CSE</a>
+        <a href="/agenda.html">Agenda</a>
+        <a href="/documents.html">PV &amp; documents</a>
+        <a href="/idees.html">Id&eacute;es</a>
+        <a href="/membres.html">Membres</a>
+      </nav>
+    </header>
+    <main>
+      <section class="subpage-hero">
+        <p class="eyebrow">Expression libre</p>
+        <h1>Id&eacute;es et priorit&eacute;s</h1>
+        <p>Proposez une id&eacute;e anonymement, puis votez pour les sujets valid&eacute;s par le CSE.</p>
+      </section>
+      <section class="section idea-section">
+        <div class="section-heading reveal">
+          <p class="eyebrow">Proposer</p>
+          <h2>Bo&icirc;te &agrave; id&eacute;es anonyme</h2>
+        </div>
+        <form class="idea-form reveal" data-idea-form>
+          <label>
+            Sujet
+            <select name="category" required>
+              <option value="activites">Activit&eacute;s et sorties</option>
+              <option value="avantages">Avantages salari&eacute;s</option>
+              <option value="social">Questions sociales</option>
+              <option value="conditions">Conditions de travail</option>
+              <option value="autre">Autre sujet</option>
+            </select>
+          </label>
+          <label>
+            Message
+            <textarea name="message" rows="6" minlength="12" maxlength="1200" placeholder="Votre demande, id&eacute;e ou remont&eacute;e..." required></textarea>
+          </label>
+          <label>
+            Contexte optionnel
+            <input name="context" maxlength="240" placeholder="Service, site, p&eacute;riode concern&eacute;e...">
+          </label>
+          <div class="form-footer">
+            <p>Aucune identit&eacute; n'est demand&eacute;e ni enregistr&eacute;e.</p>
+            <button class="button button-primary" type="submit">Envoyer anonymement</button>
+          </div>
+          <p class="form-status" role="status" data-form-status></p>
+        </form>
+      </section>
+      <section class="section vote-section">
+        <div class="section-heading reveal">
+          <p class="eyebrow">Voter</p>
+          <h2>Id&eacute;es valid&eacute;es par le CSE</h2>
+        </div>
+        <div class="ideas-public-list reveal" data-approved-ideas>
+          <article class="empty-state">
+            <h3>Aucune id&eacute;e valid&eacute;e pour le moment</h3>
+            <p>Les propositions appara&icirc;tront ici apr&egrave;s validation par les membres du CSE.</p>
+          </article>
+        </div>
+      </section>
+    </main>
+    <footer class="site-footer"><span>CSE &middot; Id&eacute;es</span><a href="/confidentialite.html">Confidentialit&eacute;</a></footer>
+  </body>
+</html>

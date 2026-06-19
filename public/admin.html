@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Administration CSE">
+    <title>Admin CSE</title>
+    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/admin.css">
+    <script src="/admin.js" defer></script>
+  </head>
+  <body class="admin-body">
+    <header class="admin-header">
+      <a class="brand" href="/">
+        <span class="brand-mark">CSE</span>
+        <span class="brand-copy">Administration</span>
+      </a>
+      <nav class="admin-tabs" aria-label="Sections admin">
+        <button type="button" data-tab-button="ideas">Id&eacute;es</button>
+        <button type="button" data-tab-button="content">Contenu</button>
+        <button type="button" data-tab-button="posts">Infos CSE</button>
+        <button type="button" data-tab-button="documents">PV</button>
+        <button type="button" data-tab-button="members">Membres</button>
+      </nav>
+      <a class="button button-secondary" href="/">Site public</a>
+    </header>
+
+    <main class="admin-shell">
+      <section class="admin-login" data-login-panel>
+        <div>
+          <p class="eyebrow">Acc&egrave;s membres CSE</p>
+          <h1>Connexion admin</h1>
+          <p>Renseigne le jeton d'administration configur&eacute; sur le VPS.</p>
+        </div>
+        <form class="admin-login-form" data-login-form>
+          <label>
+            Jeton admin
+            <input name="token" type="password" autocomplete="current-password" placeholder="ADMIN_TOKEN" required>
+          </label>
+          <button class="button button-primary" type="submit">Entrer</button>
+          <p class="form-status" data-login-status role="status"></p>
+        </form>
+      </section>
+
+      <section class="admin-app" data-admin-app hidden>
+        <div class="admin-summary">
+          <article>
+            <span data-admin-pending>0</span>
+            <p>Id&eacute;es &agrave; traiter</p>
+          </article>
+          <article>
+            <span data-admin-approved>0</span>
+            <p>Id&eacute;es publi&eacute;es</p>
+          </article>
+          <article>
+            <span data-admin-progress>0</span>
+            <p>Id&eacute;es en cours</p>
+          </article>
+          <article>
+            <span data-admin-treated>0</span>
+            <p>Id&eacute;es trait&eacute;es</p>
+          </article>
+          <article>
+            <span data-admin-documents>0</span>
+            <p>Documents</p>
+          </article>
+        </div>
+
+        <section class="admin-panel is-active" data-tab="ideas">
+          <div class="admin-panel-heading">
+            <div>
+              <p class="eyebrow">Bo&icirc;te &agrave; id&eacute;es</p>
+              <h2>Mod&eacute;rer et prioriser</h2>
+            </div>
+            <button class="button button-secondary" type="button" data-refresh>Rafra&icirc;chir</button>
+          </div>
+          <div class="admin-toolbar">
+            <label>
+              Recherche
+              <input data-idea-search placeholder="Mot-cl&eacute;, cat&eacute;gorie, contexte...">
+            </label>
+            <label>
+              Statut
+              <select data-idea-filter>
+                <option value="all">Tous</option>
+                <option value="pending">A traiter</option>
+                <option value="approved">Publi&eacute;es</option>
+                <option value="in_progress">En cours</option>
+                <option value="treated">Trait&eacute;es</option>
+                <option value="rejected">Rejet&eacute;es</option>
+              </select>
+            </label>
+            <a class="button button-secondary" href="/api/admin/ideas.csv" data-export-ideas>Exporter CSV</a>
+          </div>
+          <div class="admin-list" data-admin-ideas></div>
+        </section>
+
+        <section class="admin-panel" data-tab="content">
+          <div class="admin-panel-heading">
+            <div>
+              <p class="eyebrow">Site public</p>
+              <h2>Actualit&eacute;s et r&eacute;unions</h2>
+            </div>
+            <button class="button button-primary" type="button" data-save-content>Sauvegarder</button>
+          </div>
+          <div class="editor-grid">
+            <div>
+              <h3>Actualit&eacute;s</h3>
+              <div class="admin-list" data-news-editor></div>
+              <button class="button button-secondary" type="button" data-add-news>Ajouter une actualit&eacute;</button>
+            </div>
+            <div>
+              <h3>R&eacute;unions / agenda</h3>
+              <div class="admin-list" data-meetings-editor></div>
+              <button class="button button-secondary" type="button" data-add-meeting>Ajouter une r&eacute;union</button>
+            </div>
+          </div>
+          <p class="form-status" data-content-status role="status"></p>
+        </section>
+
+        <section class="admin-panel" data-tab="posts">
+          <div class="admin-panel-heading">
+            <div>
+              <p class="eyebrow">Articles</p>
+              <h2>Infos CSE</h2>
+            </div>
+            <button class="button button-primary" type="button" data-save-posts>Sauvegarder</button>
+          </div>
+          <div class="admin-list" data-posts-editor></div>
+          <button class="button button-secondary" type="button" data-add-post>Ajouter une info</button>
+          <p class="form-status" data-post-status role="status"></p>
+        </section>
+
+        <section class="admin-panel" data-tab="documents">
+          <div class="admin-panel-heading">
+            <div>
+              <p class="eyebrow">Documents</p>
+              <h2>Ajouter des PV</h2>
+            </div>
+          </div>
+          <form class="admin-form" data-document-form>
+            <label>
+              Titre
+              <input name="title" placeholder="PV r&eacute;union CSE - septembre 2026" required>
+            </label>
+            <label>
+              Description
+              <input name="description" placeholder="Compte-rendu valid&eacute;">
+            </label>
+            <label>
+              Visibilit&eacute;
+              <select name="visibility">
+                <option value="public">Public collaborateurs</option>
+                <option value="private">Priv&eacute; admin</option>
+              </select>
+            </label>
+            <label>
+              Fichier PDF
+              <input name="file" type="file" accept="application/pdf" required>
+            </label>
+            <button class="button button-primary" type="submit">Ajouter le PDF</button>
+            <p class="form-status" data-document-status role="status"></p>
+          </form>
+          <div class="admin-list" data-documents-editor></div>
+        </section>
+
+        <section class="admin-panel" data-tab="members">
+          <div class="admin-panel-heading">
+            <div>
+              <p class="eyebrow">Equipe</p>
+              <h2>Membres CSE</h2>
+            </div>
+            <button class="button button-primary" type="button" data-save-members>Sauvegarder</button>
+          </div>
+          <div class="admin-list" data-members-editor></div>
+          <button class="button button-secondary" type="button" data-add-member>Ajouter un membre</button>
+          <p class="form-status" data-member-status role="status"></p>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Confidentialite et donnees du site CSE">
+    <title>CSE | Confidentialite</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="site-header" data-header>
+      <a class="brand" href="/" aria-label="Accueil CSE"><span class="brand-mark">CSE</span><span class="brand-copy">Espace collaborateurs</span></a>
+      <button class="nav-toggle" type="button" aria-label="Ouvrir le menu" aria-expanded="false" data-nav-toggle><span></span><span></span></button>
+      <nav class="main-nav" data-nav>
+        <a href="/actualites.html">Actualit&eacute;s</a>
+        <a href="/infos.html">Infos CSE</a>
+        <a href="/agenda.html">Agenda</a>
+        <a href="/documents.html">PV &amp; documents</a>
+        <a href="/idees.html">Id&eacute;es</a>
+        <a href="/membres.html">Membres</a>
+      </nav>
+    </header>
+    <main>
+      <section class="subpage-hero">
+        <p class="eyebrow">Confidentialit&eacute;</p>
+        <h1>Donn&eacute;es et anonymat</h1>
+        <p>Cette page explique simplement ce qui est stock&eacute;, ce qui ne l'est pas et comment les id&eacute;es sont utilis&eacute;es.</p>
+      </section>
+      <section class="section documents-section">
+        <div class="post-list">
+          <article class="post-card">
+            <h3>Bo&icirc;te &agrave; id&eacute;es</h3>
+            <div class="post-body">
+              <p>Le formulaire ne demande ni nom, ni email, ni identifiant collaborateur. Les id&eacute;es sont enregistr&eacute;es avec une date, une cat&eacute;gorie, un message et un contexte optionnel.</p>
+              <p>Les id&eacute;es sont visibles par les membres CSE dans l'espace admin. Elles ne sont publi&eacute;es sur le site public qu'apr&egrave;s validation.</p>
+            </div>
+          </article>
+          <article class="post-card">
+            <h3>Votes</h3>
+            <div class="post-body">
+              <p>Le vote sert &agrave; aider le CSE &agrave; prioriser les sujets. Le navigateur m&eacute;morise localement qu'un vote a d&eacute;j&agrave; &eacute;t&eacute; fait pour limiter les doublons depuis le m&ecirc;me poste.</p>
+            </div>
+          </article>
+          <article class="post-card">
+            <h3>Documents et administration</h3>
+            <div class="post-body">
+              <p>Les documents publics sont accessibles aux collaborateurs. Les documents marqu&eacute;s priv&eacute;s sont r&eacute;serv&eacute;s &agrave; l'espace admin.</p>
+              <p>L'acc&egrave;s admin est prot&eacute;g&eacute; par une URL priv&eacute;e et un jeton long configur&eacute;s sur le serveur.</p>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+    <footer class="site-footer"><span>CSE &middot; Confidentialit&eacute;</span><a href="/">Accueil</a></footer>
+  </body>
+</html>
