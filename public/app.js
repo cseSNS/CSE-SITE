@@ -199,13 +199,14 @@ function renderDocuments(items) {
   documentList.replaceChildren();
   items.slice(0, getLimit(documentList, items.length)).forEach((item) => {
     const link = createElement("a", "document-row");
-    link.href = item.url;
-    link.download = "";
+    const viewerParams = new URLSearchParams({ document: item.url, title: item.title || "Document CSE" });
+    link.href = `/lecteur.html?${viewerParams.toString()}`;
+    link.setAttribute("aria-label", `Consulter ${item.title || "le document"}`);
     link.append(createElement("span", "doc-icon", "PDF"));
     const copy = createElement("span");
     copy.append(createElement("strong", "", item.title));
     copy.append(createElement("small", "", item.description || "Document CSE"));
-    link.append(copy, createElement("span", "download", "Télécharger"));
+    link.append(copy, createElement("span", "download", "Consulter"));
     documentList.append(link);
   });
 }

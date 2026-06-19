@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Lecteur de documents CSE">
+    <title>CSE | Lecteur de document</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/lecteur.js" defer></script>
+  </head>
+  <body class="viewer-body">
+    <header class="site-header" data-header>
+      <a class="brand" href="/" aria-label="Accueil CSE"><span class="brand-mark">CSE</span><span class="brand-copy">Espace collaborateurs</span></a>
+      <a class="viewer-return" href="/documents.html">Retour aux documents</a>
+    </header>
+    <main class="viewer-main">
+      <div class="viewer-heading">
+        <p class="eyebrow">Lecteur CSE</p>
+        <h1 data-document-title>Document</h1>
+      </div>
+      <section class="pdf-viewer" data-pdf-viewer>
+        <iframe data-pdf-frame title="Lecteur PDF du document CSE" referrerpolicy="no-referrer"></iframe>
+      </section>
+      <p class="viewer-status" data-viewer-status role="status"></p>
+    </main>
+  </body>
+</html>

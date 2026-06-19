@@ -219,9 +219,9 @@ const mimeTypes = new Map([
 await mkdir(dataDir, { recursive: true });
 await mkdir(uploadsDir, { recursive: true });
 
-function setSecurityHeaders(res) {
+function setSecurityHeaders(res, { allowSameOriginFrame = false } = {}) {
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-Frame-Options", allowSameOriginFrame ? "SAMEORIGIN" : "DENY");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
@@ -241,7 +241,8 @@ function setSecurityHeaders(res) {
       "form-action 'self'",
       "object-src 'none'",
       "media-src 'self'",
-      "frame-ancestors 'none'"
+      "frame-src 'self'",
+      `frame-ancestors ${allowSameOriginFrame ? "'self'" : "'none'"}`
     ].join("; ")
   );
 }
@@ -1322,7 +1323,7 @@ async function serveFile(filePath, res, cacheControl = "public, max-age=3600") {
   const fileStat = await stat(filePath);
   if (!fileStat.isFile()) throw new Error("not_file");
   const ext = path.extname(filePath).toLowerCase();
-  setSecurityHeaders(res);
+  setSecurityHeaders(res, { allowSameOriginFrame: ext === ".pdf" });
   res.writeHead(200, {
     "Content-Type": mimeTypes.get(ext) || "application/octet-stream",
     "Cache-Control": cacheControl

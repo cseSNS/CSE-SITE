@@ -435,17 +435,8 @@ async function saveContent(statusElement) {
 }
 
 async function openDocument(item) {
-  if (item.visibility !== "private") {
-    window.open(item.url, "_blank", "noopener");
-    return;
-  }
-
-  const response = await fetch(item.url, { credentials: "same-origin" });
-  if (!response.ok) return;
-  const blob = await response.blob();
-  const blobUrl = URL.createObjectURL(blob);
-  window.open(blobUrl, "_blank", "noopener");
-  setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+  const params = new URLSearchParams({ document: item.url, title: item.title || "Document CSE" });
+  window.open(`/lecteur.html?${params.toString()}`, "_blank", "noopener");
 }
 
 function readFileAsDataUrl(file) {
