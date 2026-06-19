@@ -1,9 +1,10 @@
 import http from "node:http";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { appendFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Pool } from "pg";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 loadLocalEnv(path.join(__dirname, ".env"));
@@ -11,15 +12,15 @@ loadLocalEnv(path.join(__dirname, ".env"));
 const publicDir = path.join(__dirname, "public");
 const dataDir = process.env.DATA_DIR || path.join(__dirname, "data");
 const uploadsDir = path.join(dataDir, "uploads");
-const contentFile = path.join(dataDir, "content.json");
-const ideasFile = path.join(dataDir, "ideas.json");
-const legacyIdeasFile = path.join(dataDir, "ideas.jsonl");
 const port = Number(process.env.PORT || 8080);
 const adminToken = process.env.ADMIN_TOKEN || "";
 const adminPath = process.env.ADMIN_PATH ? normalizeAdminPath(process.env.ADMIN_PATH) : "";
 const notificationWebhook = process.env.CSE_NOTIFICATION_WEBHOOK || "";
 const databaseUrl = process.env.DATABASE_URL || "";
-let dbPool = null;
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is required. Configure PostgreSQL before starting cse-site.");
+}
+const dbPool = new Pool({ connectionString: databaseUrl });
 
 const ideaStatuses = new Set(["pending", "approved", "in_progress", "treated", "rejected"]);
 const publicIdeaStatuses = new Set(["approved", "in_progress"]);
@@ -320,21 +321,6 @@ async function readBody(req, maxBytes = 8192) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-async function readJson(filePath, fallback) {
-  try {
-    return JSON.parse(await readFile(filePath, "utf8"));
-  } catch {
-    return structuredClone(fallback);
-  }
-}
-
-async function writeJson(filePath, value) {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  const tmpFile = `${filePath}.${randomUUID()}.tmp`;
-  await writeFile(tmpFile, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  await rename(tmpFile, filePath);
-}
-
 function cleanText(value, maxLength) {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -407,23 +393,11 @@ function normalizeContent(rawContent) {
 }
 
 async function getContent() {
-  if (dbPool) return getContentFromDatabase();
-  return getFileContent();
-}
-
-async function getFileContent() {
-  const content = normalizeContent(await readJson(contentFile, defaultContent));
-  if (!content.news.length && !content.posts.length && !content.meetings.length && !content.documents.length && !content.members.length) {
-    return structuredClone(defaultContent);
-  }
-  return content;
+  return getContentFromDatabase();
 }
 
 async function saveContent(content) {
-  if (dbPool) return saveContentToDatabase(content);
-  const normalized = normalizeContent(content);
-  await writeJson(contentFile, normalized);
-  return normalized;
+  return saveContentToDatabase(content);
 }
 
 function getPublicContent(content) {
@@ -437,18 +411,11 @@ function getPublicContent(content) {
 }
 
 async function initializeStorage() {
-  if (databaseUrl) {
-    await initializeDatabase();
-    await migrateFilesToDatabase();
-    return;
-  }
-
-  await migrateLegacyIdeas();
+  await initializeDatabase();
+  await seedDefaultContent();
 }
 
 async function initializeDatabase() {
-  const { Pool } = await import("pg");
-  dbPool = new Pool({ connectionString: databaseUrl });
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS app_content (
       id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -498,18 +465,10 @@ async function initializeDatabase() {
   `);
 }
 
-async function migrateFilesToDatabase() {
+async function seedDefaultContent() {
   const contentCount = Number((await dbPool.query("SELECT count(*)::int AS count FROM app_content")).rows[0].count);
   if (contentCount === 0) {
-    await saveContentToDatabase(await getFileContent());
-  }
-
-  const ideasCount = Number((await dbPool.query("SELECT count(*)::int AS count FROM ideas")).rows[0].count);
-  if (ideasCount === 0) {
-    const fileDb = await getFileIdeasDb();
-    if (fileDb.ideas.length) {
-      await saveIdeasToDatabase(fileDb);
-    }
+    await saveContentToDatabase(defaultContent);
   }
 }
 
@@ -587,17 +546,7 @@ async function saveIdeasToDatabase(db) {
 }
 
 async function getIdeasDb() {
-  if (dbPool) return getIdeasFromDatabase();
-  return getFileIdeasDb();
-}
-
-async function getFileIdeasDb() {
-  const db = await readJson(ideasFile, { ideas: [] });
-  if (Array.isArray(db.ideas)) {
-    return { ideas: db.ideas.map(normalizeIdea).filter((idea) => idea.message) };
-  }
-
-  return { ideas: [] };
+  return getIdeasFromDatabase();
 }
 
 function normalizeIdea(idea) {
@@ -617,41 +566,10 @@ function normalizeIdea(idea) {
   };
 }
 
-async function migrateLegacyIdeas() {
-  try {
-    const db = await getIdeasDb();
-    if (db.ideas.length) return;
-    const content = await readFile(legacyIdeasFile, "utf8");
-    const legacyIdeas = content.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    if (!legacyIdeas.length) return;
-    await writeJson(ideasFile, {
-      ideas: legacyIdeas.map((idea) => ({
-        id: cleanText(idea.id, 80) || randomUUID(),
-        createdAt: cleanText(idea.createdAt, 40) || new Date().toISOString(),
-        category: cleanText(idea.category, 80) || "general",
-        message: cleanLongText(idea.message, 1200),
-        context: cleanText(idea.context, 240),
-        status: "pending",
-        votes: 0,
-        reviewedAt: "",
-        reviewNote: "",
-        targetMeetingId: "",
-        updatedAt: cleanText(idea.createdAt, 40) || new Date().toISOString()
-      })).filter((idea) => idea.message)
-    });
-  } catch {
-    // Legacy migration is best-effort.
-  }
-}
-
 await initializeStorage();
 
 async function saveIdeasDb(db) {
-  if (dbPool) {
-    await saveIdeasToDatabase(db);
-    return;
-  }
-  await writeJson(ideasFile, { ideas: Array.isArray(db.ideas) ? db.ideas : [] });
+  await saveIdeasToDatabase(db);
 }
 
 function publicIdea(idea) {

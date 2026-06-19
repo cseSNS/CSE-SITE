@@ -12,6 +12,7 @@ Le site ecoute sur `http://localhost:8080`.
 
 L'espace admin est disponible sur le chemin configure par `ADMIN_PATH`.
 En local, les valeurs sont dans le fichier `.env` ignore par Git.
+PostgreSQL est obligatoire: `DATABASE_URL` doit etre configure, ou lance via `docker compose`.
 
 ## Lancer avec Docker / Portainer
 
@@ -21,7 +22,7 @@ docker compose up -d --build
 
 Le service expose le port `8080` uniquement sur `127.0.0.1`. Nginx doit faire le reverse proxy HTTPS.
 Les documents uploades restent dans le volume Docker `cse_data`.
-Les contenus, idees et futurs objets applicatifs sont stockes dans PostgreSQL quand `DATABASE_URL` est configure.
+Les contenus, idees et futurs objets applicatifs sont stockes dans PostgreSQL.
 
 Avant une mise en production, configure `ADMIN_TOKEN` et `ADMIN_PATH` dans Portainer ou dans un fichier `.env` non versionne.
 Le serveur refuse l'API admin si `ADMIN_TOKEN` est absent ou trop court.
@@ -39,13 +40,13 @@ CSE_NOTIFICATION_WEBHOOK=
 ```
 
 Le `docker-compose.yml` construit automatiquement `DATABASE_URL` pour connecter l'application au service PostgreSQL.
-Au premier demarrage avec PostgreSQL, le serveur cree le schema et migre les fichiers JSON existants depuis `/data` si la base est vide.
+Au premier demarrage, le serveur cree le schema PostgreSQL et insere le contenu par defaut si la base est vide.
 
 ## Boite a idees
 
 - Endpoint public: `POST /api/ideas`
 - Moderation: chemin prive configure par `ADMIN_PATH`
-- Stockage: PostgreSQL si configure, sinon JSON persistant dans le volume Docker
+- Stockage: PostgreSQL
 - Donnees stockees: date, categorie, message, contexte optionnel
 - Donnees non stockees: nom, email, IP, identifiant collaborateur
 - Workflow: attente, validation, rejet
@@ -106,10 +107,11 @@ git pull
 docker compose up -d --build
 ```
 
-Avant la premiere migration PostgreSQL, fais une sauvegarde:
+Avant une mise a jour importante, fais une sauvegarde:
 
 ```bash
 sh scripts/backup-data.sh
+sh scripts/backup-postgres.sh
 ```
 
 ## Evolutions utiles
