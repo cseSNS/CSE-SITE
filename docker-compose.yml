@@ -1,13 +1,35 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cse-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-cse}"
+      POSTGRES_USER: "${POSTGRES_USER:-cse}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env or Portainer}"
+    volumes:
+      - cse_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cse} -d ${POSTGRES_DB:-cse}"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
   cse-site:
     build: .
     container_name: cse-site
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       PORT: "8080"
       DATA_DIR: "/data"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-cse}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cse}"
       ADMIN_TOKEN: "${ADMIN_TOKEN:?set ADMIN_TOKEN in .env or Portainer}"
       ADMIN_PATH: "${ADMIN_PATH:?set ADMIN_PATH in .env or Portainer}"
       CSE_NOTIFICATION_WEBHOOK: "${CSE_NOTIFICATION_WEBHOOK:-}"
@@ -23,3 +45,4 @@ services:
 
 volumes:
   cse_data:
+  cse_postgres:

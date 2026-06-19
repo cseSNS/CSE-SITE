@@ -4,6 +4,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 COPY package.json server.js ./
+RUN npm install --omit=dev
 COPY public ./public
 
 RUN mkdir -p /data && chown -R node:node /app /data

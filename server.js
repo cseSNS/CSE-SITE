@@ -18,6 +18,8 @@ const port = Number(process.env.PORT || 8080);
 const adminToken = process.env.ADMIN_TOKEN || "";
 const adminPath = process.env.ADMIN_PATH ? normalizeAdminPath(process.env.ADMIN_PATH) : "";
 const notificationWebhook = process.env.CSE_NOTIFICATION_WEBHOOK || "";
+const databaseUrl = process.env.DATABASE_URL || "";
+let dbPool = null;
 
 const ideaStatuses = new Set(["pending", "approved", "in_progress", "treated", "rejected"]);
 const publicIdeaStatuses = new Set(["approved", "in_progress"]);
@@ -405,11 +407,23 @@ function normalizeContent(rawContent) {
 }
 
 async function getContent() {
+  if (dbPool) return getContentFromDatabase();
+  return getFileContent();
+}
+
+async function getFileContent() {
   const content = normalizeContent(await readJson(contentFile, defaultContent));
   if (!content.news.length && !content.posts.length && !content.meetings.length && !content.documents.length && !content.members.length) {
     return structuredClone(defaultContent);
   }
   return content;
+}
+
+async function saveContent(content) {
+  if (dbPool) return saveContentToDatabase(content);
+  const normalized = normalizeContent(content);
+  await writeJson(contentFile, normalized);
+  return normalized;
 }
 
 function getPublicContent(content) {
@@ -422,7 +436,162 @@ function getPublicContent(content) {
   };
 }
 
+async function initializeStorage() {
+  if (databaseUrl) {
+    await initializeDatabase();
+    await migrateFilesToDatabase();
+    return;
+  }
+
+  await migrateLegacyIdeas();
+}
+
+async function initializeDatabase() {
+  const { Pool } = await import("pg");
+  dbPool = new Pool({ connectionString: databaseUrl });
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS app_content (
+      id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      content jsonb NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS ideas (
+      id text PRIMARY KEY,
+      created_at timestamptz NOT NULL,
+      category text NOT NULL,
+      message text NOT NULL,
+      context text NOT NULL DEFAULT '',
+      status text NOT NULL,
+      votes integer NOT NULL DEFAULT 0,
+      reviewed_at timestamptz,
+      review_note text NOT NULL DEFAULT '',
+      target_meeting_id text NOT NULL DEFAULT '',
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS ideas_status_idx ON ideas (status);
+    CREATE INDEX IF NOT EXISTS ideas_created_at_idx ON ideas (created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS admin_accounts (
+      id text PRIMARY KEY,
+      email text UNIQUE NOT NULL,
+      display_name text NOT NULL DEFAULT '',
+      role text NOT NULL DEFAULT 'member',
+      provider text NOT NULL DEFAULT 'local',
+      provider_subject text NOT NULL DEFAULT '',
+      active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS email_outbox (
+      id text PRIMARY KEY,
+      type text NOT NULL,
+      recipient text NOT NULL,
+      subject text NOT NULL,
+      payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+      status text NOT NULL DEFAULT 'pending',
+      created_at timestamptz NOT NULL DEFAULT now(),
+      sent_at timestamptz
+    );
+  `);
+}
+
+async function migrateFilesToDatabase() {
+  const contentCount = Number((await dbPool.query("SELECT count(*)::int AS count FROM app_content")).rows[0].count);
+  if (contentCount === 0) {
+    await saveContentToDatabase(await getFileContent());
+  }
+
+  const ideasCount = Number((await dbPool.query("SELECT count(*)::int AS count FROM ideas")).rows[0].count);
+  if (ideasCount === 0) {
+    const fileDb = await getFileIdeasDb();
+    if (fileDb.ideas.length) {
+      await saveIdeasToDatabase(fileDb);
+    }
+  }
+}
+
+async function getContentFromDatabase() {
+  const result = await dbPool.query("SELECT content FROM app_content WHERE id = 1");
+  if (!result.rows.length) return structuredClone(defaultContent);
+  return normalizeContent(result.rows[0].content);
+}
+
+async function saveContentToDatabase(content) {
+  const normalized = normalizeContent(content);
+  await dbPool.query(
+    `INSERT INTO app_content (id, content, updated_at)
+     VALUES (1, $1::jsonb, now())
+     ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, updated_at = now()`,
+    [JSON.stringify(normalized)]
+  );
+  return normalized;
+}
+
+function rowToIdea(row) {
+  return normalizeIdea({
+    id: row.id,
+    createdAt: row.created_at?.toISOString?.() || row.created_at,
+    category: row.category,
+    message: row.message,
+    context: row.context,
+    status: row.status,
+    votes: row.votes,
+    reviewedAt: row.reviewed_at?.toISOString?.() || row.reviewed_at || "",
+    reviewNote: row.review_note,
+    targetMeetingId: row.target_meeting_id,
+    updatedAt: row.updated_at?.toISOString?.() || row.updated_at
+  });
+}
+
+async function getIdeasFromDatabase() {
+  const result = await dbPool.query("SELECT * FROM ideas ORDER BY created_at DESC");
+  return { ideas: result.rows.map(rowToIdea) };
+}
+
+async function saveIdeasToDatabase(db) {
+  const client = await dbPool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM ideas");
+    for (const idea of db.ideas.map(normalizeIdea).filter((item) => item.message)) {
+      await client.query(
+        `INSERT INTO ideas (
+          id, created_at, category, message, context, status, votes,
+          reviewed_at, review_note, target_meeting_id, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [
+          idea.id,
+          idea.createdAt,
+          idea.category,
+          idea.message,
+          idea.context,
+          idea.status,
+          idea.votes,
+          idea.reviewedAt || null,
+          idea.reviewNote,
+          idea.targetMeetingId,
+          idea.updatedAt
+        ]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function getIdeasDb() {
+  if (dbPool) return getIdeasFromDatabase();
+  return getFileIdeasDb();
+}
+
+async function getFileIdeasDb() {
   const db = await readJson(ideasFile, { ideas: [] });
   if (Array.isArray(db.ideas)) {
     return { ideas: db.ideas.map(normalizeIdea).filter((idea) => idea.message) };
@@ -475,9 +644,13 @@ async function migrateLegacyIdeas() {
   }
 }
 
-await migrateLegacyIdeas();
+await initializeStorage();
 
 async function saveIdeasDb(db) {
+  if (dbPool) {
+    await saveIdeasToDatabase(db);
+    return;
+  }
   await writeJson(ideasFile, { ideas: Array.isArray(db.ideas) ? db.ideas : [] });
 }
 
@@ -610,8 +783,7 @@ async function handleAdminContentUpdate(req, res) {
   }
 
   const content = normalizeContent(body.content || body);
-  await writeJson(contentFile, content);
-  sendJson(res, 200, { ok: true, content });
+  sendJson(res, 200, { ok: true, content: await saveContent(content) });
 }
 
 function safeUploadName(fileName) {
@@ -666,9 +838,9 @@ async function handleAdminDocumentUpload(req, res) {
     visibility
   };
   content.documents.unshift(document);
-  await writeJson(contentFile, content);
+  const savedContent = await saveContent(content);
   notify("Nouveau document CSE", `${document.title} (${document.visibility})`);
-  sendJson(res, 201, { ok: true, document, content });
+  sendJson(res, 201, { ok: true, document, content: savedContent });
 }
 
 async function serveFile(filePath, res, cacheControl = "public, max-age=3600") {
