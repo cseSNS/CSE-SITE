@@ -332,9 +332,14 @@ function renderMembers(items) {
     card.append(createElement("h3", "", `${member.firstName} ${member.lastName}`.trim()));
     card.append(createElement("p", "", [member.service, member.site].filter(Boolean).join(" · ")));
     if (member.email) {
-      const mail = createElement("a", "member-contact", "Contacter");
+      const contact = createElement("div", "member-contact");
+      contact.append(createElement("span", "member-email", member.email));
+      const mail = createElement("a", "member-mail-action", "✉");
       mail.href = `mailto:${member.email}`;
-      card.append(mail);
+      mail.setAttribute("aria-label", `Ecrire a ${member.firstName} ${member.lastName}`.trim());
+      mail.title = `Ecrire a ${member.email}`;
+      contact.append(mail);
+      card.append(contact);
     }
     memberList.append(card);
   });

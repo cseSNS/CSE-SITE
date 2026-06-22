@@ -634,13 +634,40 @@ h1 {
 }
 
 .calendar-link,
-.member-contact,
 .featured-link {
   width: fit-content;
   color: var(--ink);
   font-weight: 850;
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.member-contact {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 750;
+}
+
+.member-mail-action {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--ink);
+  border-radius: 4px;
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.member-mail-action:hover,
+.member-mail-action:focus-visible {
+  background: var(--pink);
 }
 
 .agenda-calendar {
