@@ -70,6 +70,8 @@ function uid(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
+const silentUnauthorizedPaths = new Set(["/api/admin/login", "/api/admin/session"]);
+
 function request(path, options = {}) {
   const hasJsonBody = typeof options.body === "string";
   return fetch(path, {
@@ -80,6 +82,12 @@ function request(path, options = {}) {
       ...(hasJsonBody ? { "Content-Type": "application/json" } : {}),
       ...(options.headers || {})
     }
+  }).then((response) => {
+    if (response.status === 401 && !silentUnauthorizedPaths.has(path)) {
+      showLogin();
+      setMessage(loginStatus, "Session expiree, reconnecte-toi puis reessaie.", "error");
+    }
+    return response;
   });
 }
 

@@ -5,6 +5,7 @@ WORKDIR /app
 
 COPY package.json server.js ./
 RUN npm install --omit=dev
+COPY src ./src
 COPY public ./public
 RUN mkdir -p /app/public/vendor \
   && cp /app/node_modules/quill/dist/quill.js /app/public/vendor/quill.js \
