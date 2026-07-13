@@ -178,9 +178,16 @@
 }
 
 .admin-summary span {
+  display: block;
   color: var(--coral);
   font-size: 2rem;
   font-weight: 950;
+  overflow-wrap: break-word;
+}
+
+.admin-summary span[data-admin-next-meeting] {
+  font-size: 1.3rem;
+  line-height: 1.25;
 }
 
 .admin-summary p {
