@@ -372,27 +372,51 @@ function editorCard(type, item) {
   return card;
 }
 
+function documentYear(item) {
+  return (item.publishedAt || item.createdAt || "").slice(0, 4) || "Sans date";
+}
+
+function groupDocumentsByYear(items) {
+  const groups = new Map();
+  items.forEach((item) => {
+    const year = documentYear(item);
+    if (!groups.has(year)) groups.set(year, []);
+    groups.get(year).push(item);
+  });
+  return [...groups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+}
+
+function createDocumentCard(item) {
+  const card = createElement("article", "admin-item");
+  card.append(createElement("h3", "", item.title));
+  card.append(createElement("p", "admin-item-meta", `${item.description || "Document"} · ${item.visibility || "public"} · ${item.url}`));
+  const actions = createElement("div", "admin-actions");
+  const open = createElement("button", "button button-secondary", "Ouvrir");
+  open.type = "button";
+  open.addEventListener("click", () => openDocument(item));
+  const remove = createElement("button", "button button-danger", "Retirer du site");
+  remove.type = "button";
+  remove.addEventListener("click", async () => {
+    content.documents = content.documents.filter((documentItem) => documentItem.id !== item.id);
+    await saveContent(documentStatus);
+  });
+  actions.append(open, remove);
+  card.append(actions);
+  return card;
+}
+
 function renderContentEditors() {
   newsEditor.replaceChildren(...content.news.map((item) => editorCard("news", item)));
   postsEditor.replaceChildren(...(content.posts || []).map((item) => editorCard("post", item)));
   meetingsEditor.replaceChildren(...content.meetings.map((item) => editorCard("meeting", item)));
-  documentsEditor.replaceChildren(...content.documents.map((item) => {
-    const card = createElement("article", "admin-item");
-    card.append(createElement("h3", "", item.title));
-    card.append(createElement("p", "admin-item-meta", `${item.description || "Document"} · ${item.visibility || "public"} · ${item.url}`));
-    const actions = createElement("div", "admin-actions");
-    const open = createElement("button", "button button-secondary", "Ouvrir");
-    open.type = "button";
-    open.addEventListener("click", () => openDocument(item));
-    const remove = createElement("button", "button button-danger", "Retirer du site");
-    remove.type = "button";
-    remove.addEventListener("click", async () => {
-      content.documents = content.documents.filter((documentItem) => documentItem.id !== item.id);
-      await saveContent(documentStatus);
-    });
-    actions.append(open, remove);
-    card.append(actions);
-    return card;
+  documentsEditor.replaceChildren(...groupDocumentsByYear(content.documents).map(([year, yearDocuments], index) => {
+    const details = createElement("details", "admin-year");
+    details.open = index === 0;
+    details.append(createElement("summary", "", `${year} (${yearDocuments.length})`));
+    const list = createElement("div", "admin-list");
+    yearDocuments.forEach((item) => list.append(createDocumentCard(item)));
+    details.append(list);
+    return details;
   }));
   membersEditor.replaceChildren(...content.members.map((item) => editorCard("member", item)));
 }

@@ -219,6 +219,45 @@
   gap: 12px;
 }
 
+.admin-year {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.admin-year summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  cursor: pointer;
+  font-weight: 850;
+  color: var(--ink);
+  list-style: none;
+}
+
+.admin-year summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-year summary::before {
+  content: "\203A";
+  display: inline-block;
+  color: var(--teal);
+  font-size: 1.1rem;
+  transition: transform 180ms ease;
+}
+
+.admin-year[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.admin-year .admin-list {
+  padding: 0 16px 16px;
+}
+
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

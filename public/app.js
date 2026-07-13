@@ -265,6 +265,43 @@ function renderAgendaCalendar(items) {
   agendaCalendar.append(heading, grid);
 }
 
+function documentYear(item) {
+  return (item.publishedAt || item.createdAt || "").slice(0, 4) || "Sans date";
+}
+
+function groupDocumentsByYear(items) {
+  const groups = new Map();
+  items.forEach((item) => {
+    const year = documentYear(item);
+    if (!groups.has(year)) groups.set(year, []);
+    groups.get(year).push(item);
+  });
+  return [...groups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+}
+
+function createDocumentRow(item) {
+  const link = createElement("a", "document-row");
+  const viewerParams = new URLSearchParams({ document: item.url, title: item.title || "Document CSE" });
+  link.href = `/lecteur.html?${viewerParams.toString()}`;
+  link.setAttribute("aria-label", `Consulter ${item.title || "le document"}`);
+  link.addEventListener("click", (event) => {
+    if (!publicDocumentViewer || !publicPdfFrame || !item.url) return;
+    event.preventDefault();
+    publicDocumentTitle.textContent = item.title || "Document CSE";
+    publicPdfFrame.src = item.url;
+    publicDocumentViewer.hidden = false;
+    publicDocumentViewer.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  link.append(createElement("span", "doc-icon", "PDF"));
+  const copy = createElement("span");
+  copy.append(createElement("strong", "", item.title));
+  const metadata = [item.description || "Document CSE", item.publishedAt ? formatDate(item.publishedAt) : ""].filter(Boolean).join(" · ");
+  copy.append(createElement("small", "", metadata));
+  if (item.pinned) copy.append(createElement("small", "document-pinned", "Document epingle"));
+  link.append(copy, createElement("span", "download", "Consulter"));
+  return link;
+}
+
 function renderDocuments(items) {
   if (!documentList) return;
   const query = (documentSearch?.value || "").trim().toLowerCase();
@@ -274,27 +311,22 @@ function renderDocuments(items) {
     return matchesQuery && (kind === "all" || item.kind === kind);
   });
   documentList.replaceChildren();
-  visibleDocuments.slice(0, getLimit(documentList, visibleDocuments.length)).forEach((item) => {
-    const link = createElement("a", "document-row");
-    const viewerParams = new URLSearchParams({ document: item.url, title: item.title || "Document CSE" });
-    link.href = `/lecteur.html?${viewerParams.toString()}`;
-    link.setAttribute("aria-label", `Consulter ${item.title || "le document"}`);
-    link.addEventListener("click", (event) => {
-      if (!publicDocumentViewer || !publicPdfFrame || !item.url) return;
-      event.preventDefault();
-      publicDocumentTitle.textContent = item.title || "Document CSE";
-      publicPdfFrame.src = item.url;
-      publicDocumentViewer.hidden = false;
-      publicDocumentViewer.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-    link.append(createElement("span", "doc-icon", "PDF"));
-    const copy = createElement("span");
-    copy.append(createElement("strong", "", item.title));
-    const metadata = [item.description || "Document CSE", item.publishedAt ? formatDate(item.publishedAt) : ""].filter(Boolean).join(" · ");
-    copy.append(createElement("small", "", metadata));
-    if (item.pinned) copy.append(createElement("small", "document-pinned", "Document epingle"));
-    link.append(copy, createElement("span", "download", "Consulter"));
-    documentList.append(link);
+
+  const limit = Number(documentList.dataset.limit || 0);
+  if (limit > 0) {
+    visibleDocuments.slice(0, limit).forEach((item) => documentList.append(createDocumentRow(item)));
+    return;
+  }
+
+  groupDocumentsByYear(visibleDocuments).forEach(([year, yearDocuments], index) => {
+    const details = createElement("details", "documents-year");
+    details.open = index === 0;
+    const summary = createElement("summary", "", `${year} (${yearDocuments.length})`);
+    details.append(summary);
+    const group = createElement("div", "documents-list-group");
+    yearDocuments.forEach((item) => group.append(createDocumentRow(item)));
+    details.append(group);
+    documentList.append(details);
   });
 }
 

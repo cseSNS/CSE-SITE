@@ -608,7 +608,7 @@ function normalizeContent(rawContent) {
       visibility: ["public", "private"].includes(item.visibility) ? item.visibility : "public",
       kind: normalizeDocumentKind(item.kind, item.title),
       pinned: Boolean(item.pinned),
-      publishedAt: cleanDate(item.publishedAt) || cleanDate(item.createdAt)
+      publishedAt: cleanDate(item.publishedAt) || cleanDate(String(item.createdAt || "").slice(0, 10))
     })).filter((item) => item.title && item.url.startsWith("/")) : [],
     members: Array.isArray(content.members) ? content.members.slice(0, 40).map((item) => ({
       id: cleanText(item.id, 80) || randomUUID(),
